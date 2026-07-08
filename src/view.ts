@@ -1,7 +1,9 @@
 import { ItemView, WorkspaceLeaf, Notice, setIcon } from "obsidian";
+import { existsSync } from "fs";
+import { join } from "path";
 import type BeadsPlugin from "./main";
 import { BeadIssue, VIEW_TYPE_BEADS } from "./types";
-import { bdList, bdClose, BdError } from "./bd";
+import { bdReady, bdBlocked, bdByStatus, bdClose, BdError } from "./bd";
 import { BeadDetailModal } from "./detail";
 
 const PRIORITY_LABEL: Record<number, string> = {
@@ -12,11 +14,39 @@ const PRIORITY_LABEL: Record<number, string> = {
 	4: "P4",
 };
 
+interface Group {
+	key: string;
+	label: string;
+	issues: BeadIssue[];
+}
+
+/** What the pane is currently showing. bd owns the partition; we only display. */
+type PaneState =
+	| { kind: "ok"; groups: Group[] }
+	| { kind: "error"; message: string }
+	| { kind: "no-root" }
+	| { kind: "no-db" };
+
+function byPriority(issues: BeadIssue[]): BeadIssue[] {
+	return issues
+		.slice()
+		.sort(
+			(a, b) =>
+				(a.priority ?? 9) - (b.priority ?? 9) ||
+				a.id.localeCompare(b.id),
+		);
+}
+
 export class BeadsView extends ItemView {
-	private issues: BeadIssue[] = [];
+	private state: PaneState = { kind: "no-root" };
 	private loading = false;
-	private errorMsg: string | null = null;
 	private closing = new Set<string>();
+
+	// Refresh correctness guard: single in-flight refresh per pane, plus a
+	// monotonic request id so a slow load can never clobber a newer one.
+	private inFlight = false;
+	private rerunRequested = false;
+	private seq = 0;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -43,42 +73,85 @@ export class BeadsView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
-		this.issues = [];
+		this.state = { kind: "no-root" };
 	}
 
-	/** Re-fetch `bd list --json` and re-render. */
+	/**
+	 * Re-fetch and re-render. At most one load runs at a time; a refresh
+	 * requested while one is running coalesces into a single re-run afterward,
+	 * so overlapping triggers (interval, fs.watch, manual, post-close) can't
+	 * race or clobber fresher state.
+	 */
 	async refresh(): Promise<void> {
+		if (this.inFlight) {
+			this.rerunRequested = true;
+			return;
+		}
+		this.inFlight = true;
+		try {
+			do {
+				this.rerunRequested = false;
+				await this.fetchState();
+			} while (this.rerunRequested);
+		} finally {
+			this.inFlight = false;
+			this.render();
+		}
+	}
+
+	private async fetchState(): Promise<void> {
+		const mySeq = ++this.seq;
 		const s = this.plugin.settings;
+
 		if (!s.projectRoot) {
-			this.errorMsg =
-				"No project root set. Open Beads settings and point it at a directory containing .beads/.";
-			this.issues = [];
+			this.state = { kind: "no-root" };
 			this.render();
 			return;
 		}
-		this.loading = true;
-		this.errorMsg = null;
-		this.render();
-		try {
-			const issues = await bdList(
-				{ bdPath: s.bdPath, cwd: s.projectRoot },
-				s.showClosed,
-				s.limit,
-			);
-			issues.sort(
-				(a, b) =>
-					(a.priority ?? 9) - (b.priority ?? 9) ||
-					a.id.localeCompare(b.id),
-			);
-			this.issues = issues;
-			this.errorMsg = null;
-		} catch (e) {
-			this.errorMsg =
-				e instanceof BdError ? e.message : `Failed to load: ${String(e)}`;
-			this.issues = [];
-		} finally {
-			this.loading = false;
+		if (!existsSync(join(s.projectRoot, ".beads"))) {
+			this.state = { kind: "no-db" };
 			this.render();
+			return;
+		}
+
+		this.loading = true;
+		this.render();
+
+		const opts = { bdPath: s.bdPath, cwd: s.projectRoot };
+		try {
+			// Three explicit sources — bd computes each group. Never derive one
+			// group by subtracting another (blocked issues keep status=open).
+			const [inProgress, ready, blocked, closed] = await Promise.all([
+				bdByStatus(opts, "in_progress", s.limit),
+				bdReady(opts, s.limit),
+				bdBlocked(opts),
+				s.showClosed
+					? bdByStatus(opts, "closed", s.limit)
+					: Promise.resolve([] as BeadIssue[]),
+			]);
+			if (mySeq !== this.seq) return; // a newer load supersedes this one
+
+			const groups: Group[] = [
+				{ key: "in_progress", label: "In progress", issues: byPriority(inProgress) },
+				{ key: "ready", label: "Ready", issues: byPriority(ready) },
+				{ key: "blocked", label: "Blocked", issues: byPriority(blocked) },
+			];
+			if (s.showClosed) {
+				groups.push({ key: "closed", label: "Closed", issues: byPriority(closed) });
+			}
+			this.state = { kind: "ok", groups };
+		} catch (e) {
+			if (mySeq !== this.seq) return;
+			this.state = {
+				kind: "error",
+				message:
+					e instanceof BdError ? e.message : `Failed to load: ${String(e)}`,
+			};
+		} finally {
+			if (mySeq === this.seq) {
+				this.loading = false;
+				this.render();
+			}
 		}
 	}
 
@@ -105,8 +178,13 @@ export class BeadsView extends ItemView {
 		}
 	}
 
-	private async openDetail(issue: BeadIssue): Promise<void> {
+	private openDetail(issue: BeadIssue): void {
 		new BeadDetailModal(this.app, this.plugin, issue.id).open();
+	}
+
+	private totalIssues(): number {
+		if (this.state.kind !== "ok") return 0;
+		return this.state.groups.reduce((n, g) => n + g.issues.length, 0);
 	}
 
 	private render(): void {
@@ -118,49 +196,64 @@ export class BeadsView extends ItemView {
 		const header = root.createDiv({ cls: "beads-header" });
 		const title = header.createDiv({ cls: "beads-header-title" });
 		title.createSpan({ text: "Beads" });
-		const count = this.issues.length;
-		if (!this.loading && !this.errorMsg) {
-			title.createSpan({
-				cls: "beads-count",
-				text: ` ${count}`,
-			});
+		if (this.state.kind === "ok") {
+			title.createSpan({ cls: "beads-count", text: ` ${this.totalIssues()}` });
 		}
 		const refreshBtn = header.createEl("button", {
 			cls: "beads-icon-btn",
 			attr: { "aria-label": "Refresh" },
 		});
 		setIcon(refreshBtn, "refresh-cw");
-		refreshBtn.toggleClass("beads-spin", this.loading);
+		refreshBtn.toggleClass("beads-spin", this.loading || this.inFlight);
 		refreshBtn.onclick = () => void this.refresh();
 
-		// --- Body states ---
-		if (this.errorMsg) {
-			const err = root.createDiv({ cls: "beads-empty beads-error" });
-			err.setText(this.errorMsg);
-			return;
-		}
-		if (this.loading && this.issues.length === 0) {
-			root.createDiv({ cls: "beads-empty", text: "Loading…" });
-			return;
-		}
-		if (this.issues.length === 0) {
-			root.createDiv({
-				cls: "beads-empty",
-				text: this.plugin.settings.showClosed
-					? "No issues."
-					: "No open issues. 🎉",
-			});
-			return;
-		}
-
-		// --- List ---
-		const list = root.createDiv({ cls: "beads-list" });
-		for (const issue of this.issues) {
-			this.renderRow(list, issue);
+		// --- Body ---
+		switch (this.state.kind) {
+			case "no-root":
+				root.createDiv({
+					cls: "beads-empty",
+					text: "No project root set. Open Beads settings and point it at a directory containing .beads/.",
+				});
+				return;
+			case "no-db":
+				root.createDiv({
+					cls: "beads-empty",
+					text: "No bd database here — this folder has no .beads/. Check the project root in Beads settings.",
+				});
+				return;
+			case "error": {
+				const err = root.createDiv({ cls: "beads-empty beads-error" });
+				err.setText(this.state.message);
+				return;
+			}
+			case "ok": {
+				const visible = this.state.groups.filter((g) => g.issues.length > 0);
+				if (visible.length === 0) {
+					root.createDiv({
+						cls: "beads-empty",
+						text: this.loading ? "Loading…" : "No open issues 🎉",
+					});
+					return;
+				}
+				const list = root.createDiv({ cls: "beads-list" });
+				for (const group of visible) {
+					this.renderGroup(list, group);
+				}
+				return;
+			}
 		}
 	}
 
-	private renderRow(parent: HTMLElement, issue: BeadIssue): void {
+	private renderGroup(parent: HTMLElement, group: Group): void {
+		const gh = parent.createDiv({ cls: `beads-group-head beads-group-${group.key}` });
+		gh.createSpan({ cls: "beads-group-label", text: group.label });
+		gh.createSpan({ cls: "beads-group-count", text: String(group.issues.length) });
+		for (const issue of group.issues) {
+			this.renderRow(parent, issue, group.key);
+		}
+	}
+
+	private renderRow(parent: HTMLElement, issue: BeadIssue, groupKey: string): void {
 		const isClosed = issue.status === "closed";
 		const row = parent.createDiv({ cls: "beads-row" });
 		if (isClosed) row.addClass("beads-row-closed");
@@ -176,8 +269,7 @@ export class BeadsView extends ItemView {
 		box.onclick = (ev) => {
 			ev.stopPropagation();
 			if (isClosed) return;
-			// revert visual until the close confirms via refresh
-			box.checked = false;
+			box.checked = false; // revert until the close confirms via refresh
 			void this.closeIssue(issue);
 		};
 
@@ -188,7 +280,7 @@ export class BeadsView extends ItemView {
 			text: PRIORITY_LABEL[pr] ?? `P${pr}`,
 		});
 
-		// Title + meta (clickable → detail). setText keeps titles as inert text.
+		// Title + meta (clickable → detail). setText keeps titles inert.
 		const main = row.createDiv({ cls: "beads-main" });
 		main.createDiv({ cls: "beads-title", text: issue.title });
 		const meta = main.createDiv({ cls: "beads-meta" });
@@ -196,9 +288,13 @@ export class BeadsView extends ItemView {
 		if (issue.issue_type) {
 			meta.createSpan({ cls: "beads-type", text: issue.issue_type });
 		}
-		if (issue.status && issue.status !== "open") {
-			meta.createSpan({ cls: "beads-status", text: issue.status });
+		// Blocked rows: show how many deps they wait on (already in row data).
+		if (groupKey === "blocked" && (issue.dependency_count ?? 0) > 0) {
+			meta.createSpan({
+				cls: "beads-deps",
+				text: `⛓ ${issue.dependency_count}`,
+			});
 		}
-		main.onclick = () => void this.openDetail(issue);
+		main.onclick = () => this.openDetail(issue);
 	}
 }

@@ -77,15 +77,41 @@ function parseIssues(stdout: string): BeadIssue[] {
 	return [];
 }
 
-/** `bd list --json` (optionally including closed issues). */
-export async function bdList(
+/**
+ * `bd ready --json` — unblocked, actionable work (deps satisfied). This is the
+ * "what can I do right now" set; bd computes it, we only display it.
+ */
+export async function bdReady(
 	opts: BdOptions,
-	includeClosed: boolean,
 	limit: number,
 ): Promise<BeadIssue[]> {
-	const args = ["list", "--json", "--no-pager", "--limit", String(limit)];
-	if (includeClosed) args.push("--all");
-	const { stdout } = await run(args, opts);
+	const { stdout } = await run(
+		["ready", "--json", "--limit", String(limit)],
+		opts,
+	);
+	return parseIssues(stdout);
+}
+
+/**
+ * `bd blocked --json` — issues waiting on unsatisfied dependencies. NOTE:
+ * dependency-blocked issues keep `status=open`, so they can only be found via
+ * this command — never by subtracting `ready` from `list`.
+ */
+export async function bdBlocked(opts: BdOptions): Promise<BeadIssue[]> {
+	const { stdout } = await run(["blocked", "--json"], opts);
+	return parseIssues(stdout);
+}
+
+/** `bd list --status <status> --json` — issues in one stored status. */
+export async function bdByStatus(
+	opts: BdOptions,
+	status: string,
+	limit: number,
+): Promise<BeadIssue[]> {
+	const { stdout } = await run(
+		["list", "--status", status, "--json", "--no-pager", "--limit", String(limit)],
+		opts,
+	);
 	return parseIssues(stdout);
 }
 

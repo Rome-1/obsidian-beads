@@ -83,7 +83,7 @@ export class BeadsSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Show closed issues")
-			.setDesc("Include closed issues in the pane (bd list --all).")
+			.setDesc("Add a Closed group to the pane.")
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.showClosed)
