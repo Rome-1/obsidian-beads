@@ -1,0 +1,10 @@
+# build output
+main.js
+*.js.map
+# deps
+node_modules/
+# obsidian local plugin data
+data.json
+# misc
+.DS_Store
+.env
