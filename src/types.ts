@@ -20,4 +20,6 @@ export interface BeadIssue {
 	dependent_count?: number;
 	comment_count?: number;
 	labels?: string[];
+	/** Present only on records returned by `bd dep list`. */
+	dependency_type?: string;
 }

@@ -5,14 +5,8 @@ import type BeadsPlugin from "./main";
 import { BeadIssue, VIEW_TYPE_BEADS } from "./types";
 import { bdReady, bdBlocked, bdByStatus, bdClose, BdError } from "./bd";
 import { BeadDetailModal } from "./detail";
-
-const PRIORITY_LABEL: Record<number, string> = {
-	0: "P0",
-	1: "P1",
-	2: "P2",
-	3: "P3",
-	4: "P4",
-};
+import { BeadCaptureModal } from "./capture";
+import { renderIssueRow } from "./row";
 
 interface Group {
 	key: string;
@@ -42,11 +36,12 @@ export class BeadsView extends ItemView {
 	private loading = false;
 	private closing = new Set<string>();
 
-	// Refresh correctness guard: single in-flight refresh per pane, plus a
-	// monotonic request id so a slow load can never clobber a newer one.
+	// Refresh correctness guard: at most one load runs at a time, and every
+	// refresh REQUEST bumps `reqSeq`. A load captures the request it serves and
+	// drops its render if a newer request arrived meanwhile — so a slow load can
+	// never clobber (or briefly flash) staler state over a fresher one.
 	private inFlight = false;
-	private rerunRequested = false;
-	private seq = 0;
+	private reqSeq = 0;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -77,30 +72,28 @@ export class BeadsView extends ItemView {
 	}
 
 	/**
-	 * Re-fetch and re-render. At most one load runs at a time; a refresh
-	 * requested while one is running coalesces into a single re-run afterward,
-	 * so overlapping triggers (interval, fs.watch, manual, post-close) can't
-	 * race or clobber fresher state.
+	 * Re-fetch and re-render. Every call registers a request; at most one load
+	 * runs at a time and it re-loops until it has served the latest request, so
+	 * overlapping triggers (interval, fs.watch, manual, post-close) always
+	 * converge on the freshest state without racing.
 	 */
 	async refresh(): Promise<void> {
-		if (this.inFlight) {
-			this.rerunRequested = true;
-			return;
-		}
+		++this.reqSeq;
+		if (this.inFlight) return; // the running loop will observe the new reqSeq
 		this.inFlight = true;
 		try {
-			do {
-				this.rerunRequested = false;
-				await this.fetchState();
-			} while (this.rerunRequested);
+			let served = 0;
+			while (served !== this.reqSeq) {
+				served = this.reqSeq;
+				await this.fetchState(served);
+			}
 		} finally {
 			this.inFlight = false;
 			this.render();
 		}
 	}
 
-	private async fetchState(): Promise<void> {
-		const mySeq = ++this.seq;
+	private async fetchState(reqId: number): Promise<void> {
 		const s = this.plugin.settings;
 
 		if (!s.projectRoot) {
@@ -129,7 +122,7 @@ export class BeadsView extends ItemView {
 					? bdByStatus(opts, "closed", s.limit)
 					: Promise.resolve([] as BeadIssue[]),
 			]);
-			if (mySeq !== this.seq) return; // a newer load supersedes this one
+			if (reqId !== this.reqSeq) return; // superseded by a newer request
 
 			const groups: Group[] = [
 				{ key: "in_progress", label: "In progress", issues: byPriority(inProgress) },
@@ -141,14 +134,14 @@ export class BeadsView extends ItemView {
 			}
 			this.state = { kind: "ok", groups };
 		} catch (e) {
-			if (mySeq !== this.seq) return;
+			if (reqId !== this.reqSeq) return;
 			this.state = {
 				kind: "error",
 				message:
 					e instanceof BdError ? e.message : `Failed to load: ${String(e)}`,
 			};
 		} finally {
-			if (mySeq === this.seq) {
+			if (reqId === this.reqSeq) {
 				this.loading = false;
 				this.render();
 			}
@@ -199,7 +192,16 @@ export class BeadsView extends ItemView {
 		if (this.state.kind === "ok") {
 			title.createSpan({ cls: "beads-count", text: ` ${this.totalIssues()}` });
 		}
-		const refreshBtn = header.createEl("button", {
+
+		const actions = header.createDiv({ cls: "beads-header-actions" });
+		const captureBtn = actions.createEl("button", {
+			cls: "beads-icon-btn",
+			attr: { "aria-label": "Capture a bead" },
+		});
+		setIcon(captureBtn, "plus");
+		captureBtn.onclick = () =>
+			new BeadCaptureModal(this.app, this.plugin).open();
+		const refreshBtn = actions.createEl("button", {
 			cls: "beads-icon-btn",
 			attr: { "aria-label": "Refresh" },
 		});
@@ -249,52 +251,12 @@ export class BeadsView extends ItemView {
 		gh.createSpan({ cls: "beads-group-label", text: group.label });
 		gh.createSpan({ cls: "beads-group-count", text: String(group.issues.length) });
 		for (const issue of group.issues) {
-			this.renderRow(parent, issue, group.key);
-		}
-	}
-
-	private renderRow(parent: HTMLElement, issue: BeadIssue, groupKey: string): void {
-		const isClosed = issue.status === "closed";
-		const row = parent.createDiv({ cls: "beads-row" });
-		if (isClosed) row.addClass("beads-row-closed");
-
-		// Checkbox — ticking closes the issue.
-		const box = row.createEl("input", {
-			type: "checkbox",
-			cls: "beads-check",
-		}) as HTMLInputElement;
-		box.checked = isClosed;
-		box.disabled = isClosed || this.closing.has(issue.id);
-		box.setAttr("aria-label", `Close ${issue.id}`);
-		box.onclick = (ev) => {
-			ev.stopPropagation();
-			if (isClosed) return;
-			box.checked = false; // revert until the close confirms via refresh
-			void this.closeIssue(issue);
-		};
-
-		// Priority badge.
-		const pr = issue.priority ?? 2;
-		row.createSpan({
-			cls: `beads-badge beads-p${pr}`,
-			text: PRIORITY_LABEL[pr] ?? `P${pr}`,
-		});
-
-		// Title + meta (clickable → detail). setText keeps titles inert.
-		const main = row.createDiv({ cls: "beads-main" });
-		main.createDiv({ cls: "beads-title", text: issue.title });
-		const meta = main.createDiv({ cls: "beads-meta" });
-		meta.createSpan({ cls: "beads-id", text: issue.id });
-		if (issue.issue_type) {
-			meta.createSpan({ cls: "beads-type", text: issue.issue_type });
-		}
-		// Blocked rows: show how many deps they wait on (already in row data).
-		if (groupKey === "blocked" && (issue.dependency_count ?? 0) > 0) {
-			meta.createSpan({
-				cls: "beads-deps",
-				text: `⛓ ${issue.dependency_count}`,
+			renderIssueRow(parent, issue, {
+				isClosing: (i) => this.closing.has(i.id),
+				onClose: (i) => void this.closeIssue(i),
+				onOpen: (i) => this.openDetail(i),
+				showDeps: group.key === "blocked",
 			});
 		}
-		main.onclick = () => this.openDetail(issue);
 	}
 }

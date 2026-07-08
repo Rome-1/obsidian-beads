@@ -5,9 +5,15 @@ import { BeadIssue } from "./types";
  * Thin wrapper around the `bd` CLI.
  *
  * SECURITY: every call uses `execFile` with an argument ARRAY — no shell is
- * spawned, so issue IDs, titles, and reasons cannot inject shell metacharacters
- * (`;`, `|`, `$()`, backticks, ...). Never switch this to `exec`/`spawn` with a
- * concatenated command string.
+ * spawned, so issue IDs, titles, reasons, and query expressions cannot inject
+ * shell metacharacters (`;`, `|`, `$()`, backticks, ...). Never switch this to
+ * `exec`/`spawn` with a concatenated command string. Data-controlled positional
+ * args are additionally placed after a `--` end-of-options sentinel so a value
+ * starting with `-` can't be reinterpreted as a bd flag (CWE-88).
+ *
+ * RESOURCE SAFETY: a global concurrency cap bounds how many `bd` processes can
+ * run at once, the code-block read path is de-duplicated, TTL-cached, and
+ * serialized to one at a time, and every call has a timeout + output cap.
  */
 
 export interface BdResult {
@@ -32,12 +38,32 @@ const MAX_BUFFER = 16 * 1024 * 1024; // 16 MB — plenty for JSON of a large rep
 export interface BdOptions {
 	/** Path to the bd binary (or just "bd" to resolve via PATH). */
 	bdPath: string;
-	/** Working directory — the project root containing `.beads/`. */
+	/** Working directory — the project root containing `.beads`. */
 	cwd: string;
 	timeoutMs?: number;
 }
 
-function run(args: string[], opts: BdOptions): Promise<BdResult> {
+// --- Global concurrency guard --------------------------------------------
+// Cap simultaneous bd processes plugin-wide. `active` counts slots in use.
+const MAX_CONCURRENT = 4;
+let active = 0;
+const waiters: Array<() => void> = [];
+
+function acquire(): Promise<void> {
+	if (active < MAX_CONCURRENT) {
+		active++;
+		return Promise.resolve();
+	}
+	return new Promise<void>((resolve) => waiters.push(resolve));
+}
+
+function release(): void {
+	const next = waiters.shift();
+	if (next) next(); // hand the slot straight to the next waiter (active unchanged)
+	else active--;
+}
+
+function rawExec(args: string[], opts: BdOptions): Promise<BdResult> {
 	return new Promise((resolve, reject) => {
 		execFile(
 			opts.bdPath,
@@ -63,6 +89,16 @@ function run(args: string[], opts: BdOptions): Promise<BdResult> {
 	});
 }
 
+/** Run a bd command through the global concurrency cap. */
+async function run(args: string[], opts: BdOptions): Promise<BdResult> {
+	await acquire();
+	try {
+		return await rawExec(args, opts);
+	} finally {
+		release();
+	}
+}
+
 function parseIssues(stdout: string): BeadIssue[] {
 	const trimmed = stdout.trim();
 	if (!trimmed) return [];
@@ -76,6 +112,75 @@ function parseIssues(stdout: string): BeadIssue[] {
 	if (parsed && typeof parsed === "object") return [parsed as BeadIssue];
 	return [];
 }
+
+// --- Code-block read cache -----------------------------------------------
+// The pane always reads fresh. ONLY the `beads` code block uses this cache
+// (guardrail: "no local caches except the code-block's explicit TTL"), so many
+// embedded blocks re-rendering don't hammer bd. Cleared on any mutation.
+const READ_TTL_MS = 4_000;
+const CODEBLOCK_LIMIT_MAX = 50;
+const READ_CACHE_MAX = 64;
+interface CacheEntry {
+	at: number;
+	issues: BeadIssue[];
+}
+const readCache = new Map<string, CacheEntry>();
+const pending = new Map<string, Promise<BeadIssue[]>>();
+// Serialize code-block reads to at most ONE at a time (design guardrail), on top
+// of the global cap. Identical concurrent queries still share one process via
+// `pending`; repeats within the TTL are served from `readCache`.
+let readGate: Promise<unknown> = Promise.resolve();
+
+function cacheKey(opts: BdOptions, args: string[]): string {
+	return JSON.stringify([opts.bdPath, opts.cwd, args]);
+}
+
+/**
+ * Clear the code-block read cache — call after any bd mutation (ours, or via
+ * the `.beads` watcher an external one).
+ */
+export function invalidateReadCache(): void {
+	readCache.clear();
+	pending.clear();
+}
+
+function clampLimit(limit: number): number {
+	if (!Number.isFinite(limit) || limit <= 0) return CODEBLOCK_LIMIT_MAX;
+	return Math.min(Math.floor(limit), CODEBLOCK_LIMIT_MAX);
+}
+
+/** De-duplicated, TTL-cached, singly-serialized read for the code block. */
+async function readCached(args: string[], opts: BdOptions): Promise<BeadIssue[]> {
+	const key = cacheKey(opts, args);
+	const hit = readCache.get(key);
+	if (hit) {
+		if (Date.now() - hit.at < READ_TTL_MS) return hit.issues;
+		readCache.delete(key); // evict stale so the map can't grow unbounded
+	}
+	const inflight = pending.get(key);
+	if (inflight) return inflight;
+	const p = (async () => {
+		// Wait our turn behind any other code-block read (max 1 concurrent).
+		const prev = readGate;
+		let done!: () => void;
+		readGate = new Promise<void>((r) => (done = r));
+		await prev.catch(() => undefined);
+		try {
+			const { stdout } = await run(args, opts);
+			const issues = parseIssues(stdout);
+			if (readCache.size >= READ_CACHE_MAX) readCache.clear();
+			readCache.set(key, { at: Date.now(), issues });
+			return issues;
+		} finally {
+			pending.delete(key);
+			done();
+		}
+	})();
+	pending.set(key, p);
+	return p;
+}
+
+// --- Pane reads (always fresh) -------------------------------------------
 
 /**
  * `bd ready --json` — unblocked, actionable work (deps satisfied). This is the
@@ -115,27 +220,116 @@ export async function bdByStatus(
 	return parseIssues(stdout);
 }
 
-/** `bd show <id> --json` → the single issue (or null if not found). */
+/** `bd show --json -- <id>` → the single issue (or null if not found). */
 export async function bdShow(
 	opts: BdOptions,
 	id: string,
 ): Promise<BeadIssue | null> {
-	const { stdout } = await run(["show", id, "--json"], opts);
+	const { stdout } = await run(["show", "--json", "--", id], opts);
 	const issues = parseIssues(stdout);
 	return issues[0] ?? null;
 }
 
-/** `bd close <id> -r <reason>`. */
+/**
+ * `bd dep list --json [--direction=up] -- <id>` — the issues on one side of an
+ * issue's dependency edges. `down` (default) = what this issue depends on (its
+ * blockers); `up` = what depends on this issue (its dependents). bd returns
+ * full issue records here, so no extra title lookup is needed.
+ */
+export async function bdDepList(
+	opts: BdOptions,
+	id: string,
+	direction: "down" | "up",
+): Promise<BeadIssue[]> {
+	const args = ["dep", "list", "--json"];
+	if (direction === "up") args.push("--direction=up");
+	args.push("--", id);
+	const { stdout } = await run(args, opts);
+	return parseIssues(stdout);
+}
+
+// --- Code-block reads (cached, clamped, serialized) ----------------------
+
+export async function bdReadyCached(
+	opts: BdOptions,
+	limit: number,
+): Promise<BeadIssue[]> {
+	return readCached(["ready", "--json", "--limit", String(clampLimit(limit))], opts);
+}
+
+export async function bdListCached(
+	opts: BdOptions,
+	limit: number,
+): Promise<BeadIssue[]> {
+	return readCached(
+		["list", "--json", "--no-pager", "--limit", String(clampLimit(limit))],
+		opts,
+	);
+}
+
+export async function bdBlockedCached(opts: BdOptions): Promise<BeadIssue[]> {
+	return readCached(["blocked", "--json"], opts);
+}
+
+export async function bdQueryCached(
+	opts: BdOptions,
+	expr: string,
+	limit: number,
+): Promise<BeadIssue[]> {
+	// The whole expression is ONE argv element after `--` — bd parses its own
+	// query language; no shell, no flag confusion, no injection.
+	return readCached(
+		["query", "--json", "--limit", String(clampLimit(limit)), "--", expr],
+		opts,
+	);
+}
+
+// --- Mutations (clear the code-block cache) ------------------------------
+
+/** `bd close --reason <reason> -- <id>`. */
 export async function bdClose(
 	opts: BdOptions,
 	id: string,
 	reason: string,
 ): Promise<void> {
-	await run(["close", id, "--reason", reason], opts);
+	await run(["close", "--reason", reason, "--", id], opts);
+	invalidateReadCache();
+}
+
+/**
+ * `bd create --title=<title> -t task --json` → the new issue id. Uses the
+ * `--title=` flag form (not a positional) so any title — including one that
+ * starts with `-` — is taken verbatim and never parsed as a flag.
+ */
+export async function bdCreate(
+	opts: BdOptions,
+	title: string,
+): Promise<string> {
+	const { stdout } = await run(
+		["create", `--title=${title}`, "-t", "task", "--json"],
+		opts,
+	);
+	invalidateReadCache();
+	const id = parseIssues(stdout)[0]?.id;
+	if (!id) throw new BdError("bd create did not return an issue id.");
+	return id;
 }
 
 /** Cheap probe used to validate settings: `bd --version`. */
 export async function bdVersion(opts: BdOptions): Promise<string> {
 	const { stdout } = await run(["--version"], { ...opts, timeoutMs: 5_000 });
 	return stdout.trim();
+}
+
+/** Ready-issue count from `bd status --json` (for the status bar). */
+export async function bdReadyCount(opts: BdOptions): Promise<number> {
+	const { stdout } = await run(["status", "--json"], opts);
+	try {
+		const d = JSON.parse(stdout.trim()) as {
+			summary?: { ready_issues?: number };
+		};
+		return d?.summary?.ready_issues ?? 0;
+	} catch {
+		return 0;
+	}
 }

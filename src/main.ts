@@ -1,5 +1,5 @@
-import { Plugin, WorkspaceLeaf } from "obsidian";
-import { FSWatcher, watch } from "fs";
+import { FileSystemAdapter, Plugin, WorkspaceLeaf } from "obsidian";
+import { FSWatcher, watch, existsSync } from "fs";
 import { join } from "path";
 import {
 	BeadsSettings,
@@ -8,6 +8,9 @@ import {
 } from "./settings";
 import { BeadsView } from "./view";
 import { VIEW_TYPE_BEADS } from "./types";
+import { bdReadyCount, invalidateReadCache } from "./bd";
+import { BeadCaptureModal } from "./capture";
+import { registerBeadsCodeBlock } from "./codeblock";
 
 export default class BeadsPlugin extends Plugin {
 	settings!: BeadsSettings;
@@ -16,9 +19,12 @@ export default class BeadsPlugin extends Plugin {
 	private watcher: FSWatcher | null = null;
 	private watchedRoot: string | null = null;
 	private watchDebounce: number | null = null;
+	private statusBarEl: HTMLElement | null = null;
+	private statusSeq = 0;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
+		this.detectRoot();
 
 		this.registerView(
 			VIEW_TYPE_BEADS,
@@ -36,6 +42,12 @@ export default class BeadsPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: "capture-bead",
+			name: "Capture a bead",
+			callback: () => new BeadCaptureModal(this.app, this).open(),
+		});
+
+		this.addCommand({
 			id: "refresh-beads",
 			name: "Refresh Beads pane",
 			callback: () => this.refreshViews(),
@@ -43,8 +55,14 @@ export default class BeadsPlugin extends Plugin {
 
 		this.addSettingTab(new BeadsSettingTab(this.app, this));
 
+		registerBeadsCodeBlock(this);
+
+		this.statusBarEl = this.addStatusBarItem();
+		this.statusBarEl.addClass("beads-statusbar");
+
 		this.restartRefreshTimer();
 		this.restartWatch();
+		this.updateStatusBar();
 	}
 
 	onunload(): void {
@@ -82,7 +100,7 @@ export default class BeadsPlugin extends Plugin {
 		if (leaf) workspace.revealLeaf(leaf);
 	}
 
-	/** Refresh every open Beads pane. */
+	/** Refresh every open Beads pane, and the status-bar ready count. */
 	refreshViews(): void {
 		for (const leaf of this.app.workspace.getLeavesOfType(
 			VIEW_TYPE_BEADS,
@@ -90,6 +108,43 @@ export default class BeadsPlugin extends Plugin {
 			const view = leaf.view;
 			if (view instanceof BeadsView) void view.refresh();
 		}
+		this.updateStatusBar();
+	}
+
+	/**
+	 * Auto-fill the project root on first load: if it's unset and the vault
+	 * folder itself contains a `.beads/`, use that. Never overwrite a root the
+	 * user set by hand.
+	 */
+	private detectRoot(): void {
+		if (this.settings.projectRoot) return;
+		const adapter = this.app.vault.adapter;
+		if (adapter instanceof FileSystemAdapter) {
+			const base = adapter.getBasePath();
+			if (existsSync(join(base, ".beads"))) {
+				this.settings.projectRoot = base;
+				void this.saveSettings();
+			}
+		}
+	}
+
+	/** Ambient "● N ready" in the status bar (works even with the pane closed). */
+	updateStatusBar(): void {
+		if (!this.statusBarEl) return;
+		const s = this.settings;
+		if (!s.projectRoot) {
+			this.statusBarEl.setText("");
+			return;
+		}
+		// Drop stale results: only the latest request may write the count.
+		const my = ++this.statusSeq;
+		void bdReadyCount({ bdPath: s.bdPath, cwd: s.projectRoot })
+			.then((n) => {
+				if (my === this.statusSeq) this.statusBarEl?.setText(`● ${n} ready`);
+			})
+			.catch(() => {
+				if (my === this.statusSeq) this.statusBarEl?.setText("");
+			});
 	}
 
 	restartRefreshTimer(): void {
@@ -134,6 +189,9 @@ export default class BeadsPlugin extends Plugin {
 		}
 		this.watchDebounce = window.setTimeout(() => {
 			this.watchDebounce = null;
+			// An external bd write changed the DB — drop cached embed reads so
+			// code blocks re-render fresh, not from the stale TTL cache.
+			invalidateReadCache();
 			this.refreshViews();
 		}, 400);
 	}
