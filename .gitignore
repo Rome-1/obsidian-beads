@@ -8,3 +8,13 @@ data.json
 # misc
 .DS_Store
 .env
+
+# Gas Town (added by gt)
+.runtime/
+.claude/
+.logs/
+__pycache__/
+state.json
+# crew work-tracking (embedded beads redirect — internal, not part of the plugin)
+.beads/
+mail/

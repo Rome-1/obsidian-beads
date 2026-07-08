@@ -22,6 +22,16 @@ Obsidian mobile — the same constraint the [Shell commands
 plugin](https://github.com/Taitava/obsidian-shellcommands) documents. `isDesktopOnly`
 is set in `manifest.json`.
 
+## Security notes
+
+- The plugin runs the `bd` binary you configure (default: resolved from `PATH`)
+  in the project root you configure — the same trust model as the Shell commands
+  plugin. Point it only at a `bd` you trust.
+- Commands are invoked with `execFile` and an **argument array** — never a shell
+  string — so issue IDs and other values can't inject shell metacharacters.
+- Issue titles and descriptions are rendered as plain text (never HTML), so a
+  bead authored elsewhere and synced in can't inject markup into the pane.
+
 ## Prior art (inspiration)
 
 No Obsidian + Beads plugin exists yet (checked the community registry and the Beads

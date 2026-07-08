@@ -1,0 +1,177 @@
+/* Beads for Obsidian — pane styles. Uses Obsidian theme variables. */
+
+.beads-pane {
+	padding: 0;
+	font-size: var(--font-ui-small);
+}
+
+.beads-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 8px 10px;
+	position: sticky;
+	top: 0;
+	background: var(--background-primary);
+	border-bottom: 1px solid var(--background-modifier-border);
+	z-index: 1;
+}
+
+.beads-header-title {
+	font-weight: var(--font-semibold);
+}
+
+.beads-count {
+	color: var(--text-muted);
+	font-weight: var(--font-normal);
+}
+
+.beads-icon-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	background: transparent;
+	box-shadow: none;
+	padding: 4px;
+	cursor: pointer;
+	color: var(--text-muted);
+}
+.beads-icon-btn:hover {
+	color: var(--text-normal);
+}
+
+@keyframes beads-spin {
+	from {
+		transform: rotate(0deg);
+	}
+	to {
+		transform: rotate(360deg);
+	}
+}
+.beads-spin svg {
+	animation: beads-spin 0.8s linear infinite;
+}
+
+.beads-empty {
+	padding: 16px 12px;
+	color: var(--text-muted);
+	text-align: center;
+}
+.beads-error {
+	color: var(--text-error);
+	text-align: left;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.beads-list {
+	display: flex;
+	flex-direction: column;
+}
+
+.beads-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 7px 10px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+.beads-row:hover {
+	background: var(--background-modifier-hover);
+}
+.beads-row-closed {
+	opacity: 0.55;
+}
+
+.beads-check {
+	margin-top: 2px;
+	flex: 0 0 auto;
+	cursor: pointer;
+}
+
+.beads-badge {
+	flex: 0 0 auto;
+	font-size: var(--font-smaller);
+	font-weight: var(--font-semibold);
+	padding: 1px 5px;
+	border-radius: 4px;
+	margin-top: 1px;
+	color: var(--text-on-accent);
+	background: var(--text-muted);
+	line-height: 1.4;
+}
+.beads-p0 {
+	background: var(--color-red);
+}
+.beads-p1 {
+	background: var(--color-orange);
+}
+.beads-p2 {
+	background: var(--color-yellow);
+	color: var(--text-normal);
+}
+.beads-p3 {
+	background: var(--color-blue);
+}
+.beads-p4 {
+	background: var(--background-modifier-border);
+	color: var(--text-muted);
+}
+
+.beads-main {
+	flex: 1 1 auto;
+	min-width: 0;
+	cursor: pointer;
+}
+.beads-title {
+	color: var(--text-normal);
+	word-break: break-word;
+}
+.beads-row-closed .beads-title {
+	text-decoration: line-through;
+}
+.beads-meta {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 2px;
+	color: var(--text-muted);
+	font-size: var(--font-smaller);
+}
+.beads-id {
+	font-family: var(--font-monospace);
+}
+.beads-type,
+.beads-status {
+	padding: 0 4px;
+	border-radius: 3px;
+	background: var(--background-modifier-border);
+}
+
+/* Detail modal */
+.beads-detail-grid {
+	display: grid;
+	grid-template-columns: max-content 1fr;
+	gap: 4px 12px;
+	margin: 8px 0;
+}
+.beads-detail-key {
+	color: var(--text-muted);
+}
+.beads-detail-val {
+	color: var(--text-normal);
+	word-break: break-word;
+}
+.beads-detail-desc {
+	white-space: pre-wrap;
+	word-break: break-word;
+	background: var(--background-secondary);
+	padding: 8px;
+	border-radius: 6px;
+}
+.beads-detail-actions {
+	margin-top: 12px;
+	display: flex;
+	justify-content: flex-end;
+}
