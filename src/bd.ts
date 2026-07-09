@@ -358,15 +358,26 @@ export async function bdVersion(opts: BdOptions): Promise<string> {
 	return stdout.trim();
 }
 
-/** Ready-issue count from `bd status --json` (for the status bar). */
-export async function bdReadyCount(opts: BdOptions): Promise<number> {
+/**
+ * The `summary` block of `bd status --json` — per-status counts in one cheap
+ * call (keys like `ready_issues`, `blocked_issues`, `closed_issues`, ...).
+ */
+export async function bdStatusCounts(
+	opts: BdOptions,
+): Promise<Record<string, number>> {
 	const { stdout } = await run(["status", "--json"], opts);
 	try {
 		const d = JSON.parse(stdout.trim()) as {
-			summary?: { ready_issues?: number };
+			summary?: Record<string, number>;
 		};
-		return d?.summary?.ready_issues ?? 0;
+		return d?.summary ?? {};
 	} catch {
-		return 0;
+		return {};
 	}
+}
+
+/** Ready-issue count (for the status bar). */
+export async function bdReadyCount(opts: BdOptions): Promise<number> {
+	const counts = await bdStatusCounts(opts);
+	return counts.ready_issues ?? 0;
 }

@@ -13,20 +13,17 @@ who tracks work in `bd` and lives in Obsidian.
 
 ## Features
 
-- 🗂️ **Ready-first pane** — a native `ItemView` in the sidebar that groups your work
-  into **In progress · Ready · Blocked**, so you see *what you can do right now* (bd
-  computes readiness from the dependency graph — the plugin just displays it). Blocked
-  rows show a `⛓ n` hint; closing a blocker slides its dependent up into Ready.
-- ✅ **Close from a checkbox** — tick a row and the plugin runs
-  `bd close <id> "Done from Obsidian"`, then refreshes.
-- ✏️ **Edit on click** — the detail modal (`bd show`) lets you change title, type,
-  priority, status, and description (`bd update`), and shows **Blocked by** / **Blocks**
-  dependency lists (click any to jump to it).
+- 🗂️ **Ready-first, tabbed pane** — a native `ItemView` with **Ready · In progress ·
+  Blocked · Closed** tabs (each with a live count), so you open straight to *what you
+  can do right now*. Only the active tab hits `bd`, and each paginates with **Load
+  more**, so the pane opens fast even with thousands of closed issues. Blocked rows show
+  a `⛓ n` hint.
+- ✏️ **Edit on click** — click a row to open the detail modal (`bd show`) and change
+  title, type, priority, status (close/reopen here), and description (`bd update`); it
+  also shows **Blocked by** / **Blocks** dependency lists (click any to jump to it).
 - ⚡ **Quick capture** — *Beads: Capture a bead* (or the `+` in the pane) opens a box:
   type a title and press Enter for the fast path, or set type / priority / description
   first (`bd create`).
-- 👁️ **Show / hide closed** — a toggle in the pane header adds or removes a **Closed**
-  group.
 - 📄 **Live `beads` code blocks** — embed a query in any note (Dataview-style) and get
   the same clickable rows inline. See [Embedding queries](#embedding-queries-in-notes).
 - 🔢 **Status-bar count** — an ambient `● N ready` even when the pane is closed.
@@ -61,12 +58,13 @@ Settings → Community plugins → Browse → search **"Beads"** → Install →
    `.beads/` database (auto-filled if your vault folder has one). Click **Test
    connection** to confirm `bd` is reachable.
 2. Open the pane: click the **list-checks** ribbon icon, or run **"Beads: Open Beads
-   pane"** from the command palette.
-3. Tick a checkbox to close an issue; click a row to open its detail modal, where you
-   can edit any field (title, type, priority, status, description) and see its
-   dependencies.
+   pane"** from the command palette. Switch tabs (Ready / In progress / Blocked /
+   Closed) and use **Load more** to page through long lists.
+3. Click a row to open its detail modal, where you can edit any field — title, type,
+   priority, **status** (set it to `closed` to close, or back to `open` to reopen) and
+   description — and see its dependencies.
 4. Capture new work anytime with **"Beads: Capture a bead"** (bind it to a hotkey) or
-   the `+` in the pane header. Use the 👁 toggle to show or hide closed issues.
+   the `+` in the pane header.
 
 ## Embedding queries in notes
 
@@ -106,7 +104,6 @@ a timer — and share a global read cache, so many blocks won't hammer `bd`.
 | Project root | *(empty)* | Absolute path to the directory containing `.beads/`. |
 | `bd` binary path | `bd` | Path to the `bd` executable. If not found, use the full path from `which bd` (see Troubleshooting). |
 | Auto-refresh interval | `30` | Seconds between refreshes (`0` disables). |
-| Show closed issues | off | Add a **Closed** group to the pane (also toggleable from the pane header). |
 
 ## Troubleshooting
 

@@ -1,4 +1,3 @@
-import { Notice } from "obsidian";
 import type BeadsPlugin from "./main";
 import { BeadIssue } from "./types";
 import {
@@ -6,7 +5,6 @@ import {
 	bdBlockedCached,
 	bdListCached,
 	bdQueryCached,
-	bdClose,
 	BdError,
 	BdOptions,
 } from "./bd";
@@ -143,8 +141,6 @@ export function registerBeadsCodeBlock(plugin: BeadsPlugin): void {
 				}
 				for (const issue of issues) {
 					renderIssueRow(list, issue, {
-						isClosing: () => false,
-						onClose: (i) => void closeFromEmbed(plugin, opts, i, render),
 						onOpen: (i) =>
 							new BeadDetailModal(plugin.app, plugin, i.id).open(),
 						showDeps: cfg.source === "blocked",
@@ -161,22 +157,4 @@ export function registerBeadsCodeBlock(plugin: BeadsPlugin): void {
 
 		await render();
 	});
-}
-
-async function closeFromEmbed(
-	plugin: BeadsPlugin,
-	opts: BdOptions,
-	issue: BeadIssue,
-	rerender: () => Promise<void>,
-): Promise<void> {
-	try {
-		await bdClose(opts, issue.id, "Done from Obsidian");
-		new Notice(`Beads: closed ${issue.id}`);
-		plugin.refreshViews();
-		await rerender();
-	} catch (e) {
-		new Notice(
-			`Beads: ${e instanceof BdError ? e.message : `Close failed: ${String(e)}`}`,
-		);
-	}
 }

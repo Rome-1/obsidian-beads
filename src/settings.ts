@@ -9,18 +9,12 @@ export interface BeadsSettings {
 	bdPath: string;
 	/** Auto-refresh interval in seconds (0 = disabled). */
 	refreshIntervalSec: number;
-	/** Include closed issues in the pane. */
-	showClosed: boolean;
-	/** Max issues to fetch from `bd list`. */
-	limit: number;
 }
 
 export const DEFAULT_SETTINGS: BeadsSettings = {
 	projectRoot: "",
 	bdPath: "bd",
 	refreshIntervalSec: 30,
-	showClosed: false,
-	limit: 200,
 };
 
 export class BeadsSettingTab extends PluginSettingTab {
@@ -78,19 +72,6 @@ export class BeadsSettingTab extends PluginSettingTab {
 							Number.isFinite(n) && n >= 0 ? n : 0;
 						await this.plugin.saveSettings();
 						this.plugin.restartRefreshTimer();
-					}),
-			);
-
-		new Setting(containerEl)
-			.setName("Show closed issues")
-			.setDesc("Add a Closed group to the pane.")
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.showClosed)
-					.onChange(async (value) => {
-						this.plugin.settings.showClosed = value;
-						await this.plugin.saveSettings();
-						this.plugin.refreshViews();
 					}),
 			);
 
