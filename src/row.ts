@@ -1,11 +1,11 @@
 import { BeadIssue } from "./types";
 
-const PRIORITY_LABEL: Record<number, string> = {
-	0: "P0",
-	1: "P1",
-	2: "P2",
-	3: "P3",
-	4: "P4",
+const PRIORITY_NAME: Record<number, string> = {
+	0: "P0 · critical",
+	1: "P1 · high",
+	2: "P2 · medium",
+	3: "P3 · low",
+	4: "P4 · backlog",
 };
 
 export interface RowHandlers {
@@ -13,6 +13,15 @@ export interface RowHandlers {
 	onOpen: (issue: BeadIssue) => void;
 	/** Show a "⛓ n" dependency-count hint (blocked list only). */
 	showDeps?: boolean;
+}
+
+/** A small colored priority dot (native-restrained) with the label on hover. */
+export function renderPriorityDot(parent: HTMLElement, priority: number): void {
+	const pr = priority ?? 2;
+	const dot = parent.createSpan({ cls: `beads-dot beads-p${pr}` });
+	const name = PRIORITY_NAME[pr] ?? `P${pr}`;
+	dot.setAttribute("aria-label", name);
+	dot.setAttribute("title", name);
 }
 
 /**
@@ -29,11 +38,7 @@ export function renderIssueRow(
 	const row = parent.createDiv({ cls: "beads-row" });
 	if (issue.status === "closed") row.addClass("beads-row-closed");
 
-	const pr = issue.priority ?? 2;
-	row.createSpan({
-		cls: `beads-badge beads-p${pr}`,
-		text: PRIORITY_LABEL[pr] ?? `P${pr}`,
-	});
+	renderPriorityDot(row, issue.priority ?? 2);
 
 	const main = row.createDiv({ cls: "beads-main" });
 	main.createDiv({ cls: "beads-title", text: issue.title });

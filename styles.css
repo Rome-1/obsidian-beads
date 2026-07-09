@@ -135,17 +135,13 @@
 .beads-group-ready .beads-group-label {
 	color: var(--text-accent);
 }
-.beads-deps {
-	padding: 0 4px;
-	border-radius: 3px;
-	background: var(--background-modifier-border);
-}
-
+/* Rows follow Obsidian's native list metrics (nav/search feel): roomy hit
+   target, subtle hover, muted secondary text — no loud custom chrome. */
 .beads-row {
 	display: flex;
 	align-items: flex-start;
-	gap: 8px;
-	padding: 6px 8px;
+	gap: var(--size-4-2);
+	padding: var(--size-4-1) var(--size-4-2);
 	border-radius: var(--radius-s);
 	cursor: pointer;
 }
@@ -153,25 +149,17 @@
 	background: var(--background-modifier-hover);
 }
 .beads-row-closed {
-	opacity: 0.55;
+	opacity: 0.5;
 }
 
-.beads-check {
-	margin-top: 2px;
+/* Priority as a small, restrained colored dot (full label on hover). */
+.beads-dot {
 	flex: 0 0 auto;
-	cursor: pointer;
-}
-
-.beads-badge {
-	flex: 0 0 auto;
-	font-size: var(--font-smaller);
-	font-weight: var(--font-semibold);
-	padding: 1px 5px;
-	border-radius: 4px;
-	margin-top: 1px;
-	color: var(--text-on-accent);
+	width: 8px;
+	height: 8px;
+	margin-top: 6px;
+	border-radius: 50%;
 	background: var(--text-muted);
-	line-height: 1.4;
 }
 .beads-p0 {
 	background: var(--color-red);
@@ -181,48 +169,51 @@
 }
 .beads-p2 {
 	background: var(--color-yellow);
-	color: var(--text-normal);
 }
 .beads-p3 {
 	background: var(--color-blue);
 }
 .beads-p4 {
-	background: var(--background-modifier-border);
-	color: var(--text-muted);
+	background: var(--text-faint);
 }
 
 .beads-main {
 	flex: 1 1 auto;
 	min-width: 0;
-	cursor: pointer;
 }
 .beads-title {
 	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	line-height: var(--line-height-tight);
 	word-break: break-word;
 }
 .beads-row-closed .beads-title {
 	text-decoration: line-through;
+	color: var(--text-muted);
 }
 .beads-meta {
 	display: flex;
 	flex-wrap: wrap;
-	gap: 6px;
+	gap: var(--size-4-2);
 	margin-top: 2px;
 	color: var(--text-muted);
-	font-size: var(--font-smaller);
+	font-size: var(--font-ui-smaller);
 }
 .beads-id {
 	font-family: var(--font-monospace);
+	color: var(--text-faint);
 }
 .beads-type,
-.beads-status {
-	padding: 0 4px;
-	border-radius: 3px;
-	background: var(--background-modifier-border);
+.beads-status,
+.beads-deps {
+	color: var(--text-muted);
 }
 
 /* Bead editor (embedded, opens as a main-area tab) */
 .beads-editor {
+	display: flex;
+	flex-direction: column;
+	min-height: 100%;
 	padding: 12px 16px 32px;
 	max-width: 900px;
 }
@@ -247,14 +238,16 @@
 	margin-bottom: 8px;
 }
 .beads-editor-text {
+	flex: 1 1 auto;
 	width: 100%;
-	min-height: 260px;
+	/* Fills the tab (flex above), never smaller than this even in a short pane. */
+	min-height: 340px;
 	resize: vertical;
 	font-family: var(--font-monospace);
 	font-size: var(--font-ui-small);
-	line-height: 1.5;
+	line-height: 1.6;
 	tab-size: 2;
-	padding: 12px;
+	padding: 12px 14px;
 	border-radius: 8px;
 }
 .beads-editor-meta {

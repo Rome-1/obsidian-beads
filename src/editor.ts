@@ -10,6 +10,7 @@ import { existsSync } from "fs";
 import { join } from "path";
 import type BeadsPlugin from "./main";
 import { BeadIssue, VIEW_TYPE_BEADS_EDITOR } from "./types";
+import { renderPriorityDot } from "./row";
 import {
 	bdShow,
 	bdUpdate,
@@ -333,8 +334,7 @@ export class BeadEditorView extends ItemView {
 		for (const d of deps) {
 			const item = list.createDiv({ cls: "beads-dep-item" });
 			if (d.status === "closed") item.addClass("beads-row-closed");
-			const pr = d.priority ?? 2;
-			item.createSpan({ cls: `beads-badge beads-p${pr}`, text: `P${pr}` });
+			renderPriorityDot(item, d.priority ?? 2);
 			item.createSpan({ cls: "beads-dep-id", text: d.id });
 			item.createSpan({ cls: "beads-dep-title", text: d.title });
 			item.onclick = () => void this.plugin.openBead(d.id);
