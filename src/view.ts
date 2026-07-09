@@ -194,15 +194,30 @@ export class BeadsView extends ItemView {
 		}
 
 		const actions = header.createDiv({ cls: "beads-header-actions" });
+
 		const captureBtn = actions.createEl("button", {
-			cls: "beads-icon-btn",
+			cls: "clickable-icon",
 			attr: { "aria-label": "Capture a bead" },
 		});
 		setIcon(captureBtn, "plus");
 		captureBtn.onclick = () =>
 			new BeadCaptureModal(this.app, this.plugin).open();
+
+		const showClosed = this.plugin.settings.showClosed;
+		const closedBtn = actions.createEl("button", {
+			cls: "clickable-icon",
+			attr: { "aria-label": showClosed ? "Hide closed" : "Show closed" },
+		});
+		setIcon(closedBtn, showClosed ? "eye" : "eye-off");
+		closedBtn.toggleClass("is-active", showClosed);
+		closedBtn.onclick = async () => {
+			this.plugin.settings.showClosed = !this.plugin.settings.showClosed;
+			await this.plugin.saveSettings();
+			await this.refresh();
+		};
+
 		const refreshBtn = actions.createEl("button", {
-			cls: "beads-icon-btn",
+			cls: "clickable-icon",
 			attr: { "aria-label": "Refresh" },
 		});
 		setIcon(refreshBtn, "refresh-cw");

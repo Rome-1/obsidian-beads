@@ -5,17 +5,13 @@
 	font-size: var(--font-ui-small);
 }
 
+/* Header sits flat on the pane's own background — no bar, no border. */
 .beads-header {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
-	padding: 8px 10px;
-	position: sticky;
-	top: 0;
-	background: var(--background-primary);
-	border-bottom: 1px solid var(--background-modifier-border);
-	z-index: 1;
+	padding: 6px 8px 4px;
 }
 
 .beads-header-title {
@@ -31,20 +27,6 @@
 .beads-count {
 	color: var(--text-muted);
 	font-weight: var(--font-normal);
-}
-
-.beads-icon-btn {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	background: transparent;
-	box-shadow: none;
-	padding: 4px;
-	cursor: pointer;
-	color: var(--text-muted);
-}
-.beads-icon-btn:hover {
-	color: var(--text-normal);
 }
 
 @keyframes beads-spin {
@@ -87,10 +69,10 @@
 	text-transform: uppercase;
 	letter-spacing: 0.04em;
 	color: var(--text-muted);
-	border-top: 1px solid var(--background-modifier-border);
+	margin-top: 6px;
 }
 .beads-group-head:first-child {
-	border-top: none;
+	margin-top: 0;
 }
 .beads-group-count {
 	color: var(--text-faint);
@@ -109,8 +91,8 @@
 	display: flex;
 	align-items: flex-start;
 	gap: 8px;
-	padding: 7px 10px;
-	border-bottom: 1px solid var(--background-modifier-border);
+	padding: 6px 8px;
+	border-radius: var(--radius-s);
 }
 .beads-row:hover {
 	background: var(--background-modifier-hover);
@@ -258,9 +240,24 @@
 	margin-top: 4px;
 }
 .beads-capture-hint {
-	margin-top: 8px;
 	color: var(--text-muted);
 	font-size: var(--font-smaller);
+}
+.beads-capture-actions {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin-top: 12px;
+}
+
+/* Detail modal provenance line */
+.beads-detail-meta {
+	margin-top: 10px;
+	color: var(--text-faint);
+	font-size: var(--font-smaller);
+	font-family: var(--font-monospace);
+	word-break: break-word;
 }
 
 /* `beads` code block embed */

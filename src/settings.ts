@@ -53,7 +53,7 @@ export class BeadsSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("bd binary path")
 			.setDesc(
-				'Path to the bd executable. Use "bd" to resolve it from your PATH.',
+				'Path to the bd executable. If "Test connection" fails with "not found", run `which bd` in a terminal and paste the full path here — apps launched from the GUI often don\'t inherit your shell PATH.',
 			)
 			.addText((text) =>
 				text

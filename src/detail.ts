@@ -1,9 +1,13 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Modal, Notice, Setting } from "obsidian";
 import type BeadsPlugin from "./main";
-import { BeadIssue } from "./types";
-import { bdShow, bdClose, bdDepList, BdError } from "./bd";
+import { BeadIssue, ISSUE_TYPES, PRIORITIES, EDITABLE_STATUSES } from "./types";
+import { bdShow, bdUpdate, bdDepList, BdError, BdOptions } from "./bd";
 
-/** Modal showing `bd show <id> --json` detail, with a Close-issue action. */
+/**
+ * Detail modal: shows `bd show <id>`, lets you edit the common fields (title,
+ * type, priority, status, description) via `bd update`, and lists the issue's
+ * dependencies in both directions.
+ */
 export class BeadDetailModal extends Modal {
 	constructor(
 		app: App,
@@ -13,16 +17,20 @@ export class BeadDetailModal extends Modal {
 		super(app);
 	}
 
+	private get opts(): BdOptions {
+		const s = this.plugin.settings;
+		return { bdPath: s.bdPath, cwd: s.projectRoot };
+	}
+
 	async onOpen(): Promise<void> {
 		this.titleEl.setText(this.id);
 		const body = this.contentEl;
 		body.addClass("beads-detail");
 		body.setText("Loading…");
 
-		const s = this.plugin.settings;
 		let issue: BeadIssue | null = null;
 		try {
-			issue = await bdShow({ bdPath: s.bdPath, cwd: s.projectRoot }, this.id);
+			issue = await bdShow(this.opts, this.id);
 		} catch (e) {
 			body.empty();
 			body.createDiv({
@@ -37,79 +45,104 @@ export class BeadDetailModal extends Modal {
 			body.createDiv({ text: `No issue found for ${this.id}.` });
 			return;
 		}
+		this.buildForm(issue);
+	}
 
+	private buildForm(issue: BeadIssue): void {
+		const body = this.contentEl;
 		this.titleEl.setText(issue.title);
 
-		const grid = body.createDiv({ cls: "beads-detail-grid" });
-		const field = (label: string, value: string | undefined) => {
-			if (!value) return;
-			grid.createDiv({ cls: "beads-detail-key", text: label });
-			grid.createDiv({ cls: "beads-detail-val", text: value });
+		// Editable working copy; only changed fields are sent on save.
+		const orig = {
+			title: issue.title,
+			type: issue.issue_type,
+			priority: issue.priority ?? 2,
+			status: issue.status,
+			description: issue.description ?? "",
 		};
-		field("ID", issue.id);
-		field("Status", issue.status);
-		field("Priority", `P${issue.priority ?? 2}`);
-		field("Type", issue.issue_type);
-		field("Owner", issue.owner ?? issue.assignee);
-		field("Created", issue.created_at);
-		field("Updated", issue.updated_at);
-		if (issue.labels && issue.labels.length) {
-			field("Labels", issue.labels.join(", "));
-		}
+		const cur = { ...orig };
 
-		if (issue.description) {
-			body.createEl("h4", { text: "Description" });
-			// Plain text — do not render as HTML.
-			body.createEl("pre", {
-				cls: "beads-detail-desc",
-				text: issue.description,
-			});
-		}
+		new Setting(body).setName("Title").addText((t) =>
+			t.setValue(cur.title).onChange((v) => (cur.title = v)),
+		);
 
-		// Dependency context — "why is this blocked, and what does it unblock?"
-		// Rendered async so the modal shows immediately.
+		new Setting(body).setName("Type").addDropdown((d) => {
+			const types = new Set<string>([...ISSUE_TYPES, issue.issue_type]);
+			for (const t of types) d.addOption(t, t);
+			d.setValue(cur.type).onChange((v) => (cur.type = v));
+		});
+
+		new Setting(body).setName("Priority").addDropdown((d) => {
+			for (const p of PRIORITIES) d.addOption(String(p.value), p.label);
+			d.setValue(String(cur.priority)).onChange(
+				(v) => (cur.priority = Number(v)),
+			);
+		});
+
+		new Setting(body).setName("Status").addDropdown((d) => {
+			const statuses = new Set<string>([...EDITABLE_STATUSES, issue.status]);
+			for (const st of statuses) d.addOption(st, st);
+			d.setValue(cur.status).onChange((v) => (cur.status = v));
+		});
+
+		new Setting(body).setName("Description").addTextArea((t) => {
+			t.setValue(cur.description).onChange((v) => (cur.description = v));
+			t.inputEl.rows = 4;
+		});
+
+		// Read-only provenance.
+		const meta = body.createDiv({ cls: "beads-detail-meta" });
+		const metaBits = [
+			`id ${issue.id}`,
+			issue.owner ? `owner ${issue.owner}` : "",
+			issue.updated_at ? `updated ${issue.updated_at}` : "",
+		].filter(Boolean);
+		meta.setText(metaBits.join("  ·  "));
+
+		// Dependencies (async).
 		const depsEl = body.createDiv({ cls: "beads-detail-deps" });
 		void this.loadDeps(depsEl);
 
-		if (issue.status !== "closed") {
-			const actions = body.createDiv({ cls: "beads-detail-actions" });
-			const closeBtn = actions.createEl("button", {
-				cls: "mod-cta",
-				text: "Close issue",
-			});
-			closeBtn.onclick = async () => {
-				closeBtn.disabled = true;
-				closeBtn.setText("Closing…");
-				try {
-					await bdClose(
-						{ bdPath: s.bdPath, cwd: s.projectRoot },
-						this.id,
-						"Done from Obsidian",
-					);
-					new Notice(`Beads: closed ${this.id}`);
-					this.plugin.refreshViews();
-					this.close();
-				} catch (e) {
-					const msg =
-						e instanceof BdError
-							? e.message
-							: `Close failed: ${String(e)}`;
-					new Notice(`Beads: ${msg}`);
-					closeBtn.disabled = false;
-					closeBtn.setText("Close issue");
-				}
-			};
-		}
+		// Save.
+		const actions = body.createDiv({ cls: "beads-detail-actions" });
+		const saveBtn = actions.createEl("button", {
+			cls: "mod-cta",
+			text: "Save",
+		});
+		saveBtn.onclick = async () => {
+			const f: Parameters<typeof bdUpdate>[2] = {};
+			if (cur.title.trim() && cur.title !== orig.title) f.title = cur.title.trim();
+			if (cur.type !== orig.type) f.type = cur.type;
+			if (cur.priority !== orig.priority) f.priority = cur.priority;
+			if (cur.status !== orig.status) f.status = cur.status;
+			if (cur.description !== orig.description) f.description = cur.description;
+			if (Object.keys(f).length === 0) {
+				new Notice("Beads: no changes.");
+				return;
+			}
+			saveBtn.disabled = true;
+			saveBtn.setText("Saving…");
+			try {
+				await bdUpdate(this.opts, this.id, f);
+				new Notice(`Beads: updated ${this.id}`);
+				this.plugin.refreshViews();
+				this.close();
+			} catch (e) {
+				new Notice(
+					`Beads: ${e instanceof BdError ? e.message : `Update failed: ${String(e)}`}`,
+				);
+				saveBtn.disabled = false;
+				saveBtn.setText("Save");
+			}
+		};
 	}
 
 	/** Fetch and render the two dependency directions into `container`. */
 	private async loadDeps(container: HTMLElement): Promise<void> {
-		const s = this.plugin.settings;
-		const opts = { bdPath: s.bdPath, cwd: s.projectRoot };
 		try {
 			const [blockedBy, blocks] = await Promise.all([
-				bdDepList(opts, this.id, "down"), // what this depends on
-				bdDepList(opts, this.id, "up"), // what depends on this
+				bdDepList(this.opts, this.id, "down"), // what this depends on
+				bdDepList(this.opts, this.id, "up"), // what depends on this
 			]);
 			this.renderDepSection(container, "Blocked by", blockedBy);
 			this.renderDepSection(container, "Blocks", blocks);

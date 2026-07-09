@@ -19,10 +19,14 @@ who tracks work in `bd` and lives in Obsidian.
   rows show a `⛓ n` hint; closing a blocker slides its dependent up into Ready.
 - ✅ **Close from a checkbox** — tick a row and the plugin runs
   `bd close <id> "Done from Obsidian"`, then refreshes.
-- 🔍 **Detail on click** — a modal from `bd show <id> --json` with **Blocked by** /
-  **Blocks** dependency lists (click any to jump to it) and a one-click Close action.
-- ⚡ **Quick capture** — the *Beads: Capture a bead* command opens a one-field box;
-  type a title, press Enter, and it's in your tracker (`bd create`).
+- ✏️ **Edit on click** — the detail modal (`bd show`) lets you change title, type,
+  priority, status, and description (`bd update`), and shows **Blocked by** / **Blocks**
+  dependency lists (click any to jump to it).
+- ⚡ **Quick capture** — *Beads: Capture a bead* (or the `+` in the pane) opens a box:
+  type a title and press Enter for the fast path, or set type / priority / description
+  first (`bd create`).
+- 👁️ **Show / hide closed** — a toggle in the pane header adds or removes a **Closed**
+  group.
 - 📄 **Live `beads` code blocks** — embed a query in any note (Dataview-style) and get
   the same clickable rows inline. See [Embedding queries](#embedding-queries-in-notes).
 - 🔢 **Status-bar count** — an ambient `● N ready` even when the pane is closed.
@@ -58,8 +62,11 @@ Settings → Community plugins → Browse → search **"Beads"** → Install →
    connection** to confirm `bd` is reachable.
 2. Open the pane: click the **list-checks** ribbon icon, or run **"Beads: Open Beads
    pane"** from the command palette.
-3. Tick a checkbox to close an issue; click a row for detail and its dependencies.
-4. Capture new work anytime with **"Beads: Capture a bead"** (bind it to a hotkey).
+3. Tick a checkbox to close an issue; click a row to open its detail modal, where you
+   can edit any field (title, type, priority, status, description) and see its
+   dependencies.
+4. Capture new work anytime with **"Beads: Capture a bead"** (bind it to a hotkey) or
+   the `+` in the pane header. Use the 👁 toggle to show or hide closed issues.
 
 ## Embedding queries in notes
 
@@ -97,9 +104,23 @@ a timer — and share a global read cache, so many blocks won't hammer `bd`.
 | Setting | Default | Description |
 | --- | --- | --- |
 | Project root | *(empty)* | Absolute path to the directory containing `.beads/`. |
-| `bd` binary path | `bd` | Path to the `bd` executable, or `bd` to resolve via `PATH`. |
+| `bd` binary path | `bd` | Path to the `bd` executable. If not found, use the full path from `which bd` (see Troubleshooting). |
 | Auto-refresh interval | `30` | Seconds between refreshes (`0` disables). |
-| Show closed issues | off | Add a **Closed** group to the pane. |
+| Show closed issues | off | Add a **Closed** group to the pane (also toggleable from the pane header). |
+
+## Troubleshooting
+
+- **"bd binary not found" / the pane is empty and *Test connection* fails.** GUI-launched
+  apps often don't inherit your shell `PATH`, so the default `bd` can't be resolved. Run
+  `which bd` in a terminal and paste the full path into **Settings → Beads → bd binary
+  path**.
+- **"No bd database here."** The project root must be a directory that contains a
+  `.beads/` folder. Point it at your `bd` project (not necessarily your vault).
+- **Nothing happens when I tick a blocked issue.** `bd` won't close an issue that still
+  has open blockers; the error is shown as a notice. Close its blockers first (the detail
+  modal lists them), or change its status from the detail modal.
+- **The pane didn't update after a CLI change.** It refreshes on an interval and when
+  `.beads/` changes on disk; hit the refresh icon to force it.
 
 ## Security
 

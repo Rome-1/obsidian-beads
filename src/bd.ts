@@ -296,23 +296,60 @@ export async function bdClose(
 	invalidateReadCache();
 }
 
+export interface BdCreateFields {
+	title: string;
+	type: string;
+	priority: number;
+	description?: string;
+}
+
 /**
- * `bd create --title=<title> -t task --json` → the new issue id. Uses the
- * `--title=` flag form (not a positional) so any title — including one that
- * starts with `-` — is taken verbatim and never parsed as a flag.
+ * `bd create --title=<t> -t <type> -p <n> [--description=<d>] --json` → new id.
+ * Free-text fields use the `--flag=value` form so a value starting with `-`
+ * is taken verbatim and never parsed as a flag.
  */
 export async function bdCreate(
 	opts: BdOptions,
-	title: string,
+	f: BdCreateFields,
 ): Promise<string> {
-	const { stdout } = await run(
-		["create", `--title=${title}`, "-t", "task", "--json"],
-		opts,
-	);
+	const args = [
+		"create",
+		`--title=${f.title}`,
+		`--type=${f.type}`,
+		`--priority=${f.priority}`,
+	];
+	if (f.description) args.push(`--description=${f.description}`);
+	args.push("--json");
+	const { stdout } = await run(args, opts);
 	invalidateReadCache();
 	const id = parseIssues(stdout)[0]?.id;
 	if (!id) throw new BdError("bd create did not return an issue id.");
 	return id;
+}
+
+export interface BdUpdateFields {
+	title?: string;
+	description?: string;
+	priority?: number;
+	type?: string;
+	status?: string;
+}
+
+/** `bd update <flags> -- <id>` — change any subset of an issue's fields. */
+export async function bdUpdate(
+	opts: BdOptions,
+	id: string,
+	f: BdUpdateFields,
+): Promise<void> {
+	const args = ["update"];
+	if (f.title !== undefined) args.push(`--title=${f.title}`);
+	if (f.description !== undefined) args.push(`--description=${f.description}`);
+	if (f.priority !== undefined) args.push(`--priority=${f.priority}`);
+	if (f.type !== undefined) args.push(`--type=${f.type}`);
+	if (f.status !== undefined) args.push(`--status=${f.status}`);
+	args.push("--", id);
+	await run(args, opts);
+	invalidateReadCache();
 }
 
 /** Cheap probe used to validate settings: `bd --version`. */
