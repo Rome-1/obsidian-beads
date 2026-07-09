@@ -221,37 +221,63 @@
 	background: var(--background-modifier-border);
 }
 
-/* Detail modal */
-.beads-detail-grid {
-	display: grid;
-	grid-template-columns: max-content 1fr;
-	gap: 4px 12px;
-	margin: 8px 0;
+/* Bead editor (embedded, opens as a main-area tab) */
+.beads-editor {
+	padding: 12px 16px 32px;
+	max-width: 900px;
 }
-.beads-detail-key {
+.beads-editor-bar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin-bottom: 4px;
+}
+.beads-editor-id {
+	font-family: var(--font-monospace);
 	color: var(--text-muted);
 }
-.beads-detail-val {
-	color: var(--text-normal);
-	word-break: break-word;
-}
-.beads-detail-desc {
-	white-space: pre-wrap;
-	word-break: break-word;
-	background: var(--background-secondary);
-	padding: 8px;
-	border-radius: 6px;
-}
-.beads-detail-actions {
-	margin-top: 12px;
+.beads-editor-actions {
 	display: flex;
-	justify-content: flex-end;
+	gap: 6px;
+}
+.beads-editor-hint {
+	color: var(--text-muted);
+	font-size: var(--font-smaller);
+	margin-bottom: 8px;
+}
+.beads-editor-text {
+	width: 100%;
+	min-height: 260px;
+	resize: vertical;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-small);
+	line-height: 1.5;
+	tab-size: 2;
+	padding: 12px;
+	border-radius: 8px;
+}
+.beads-editor-meta {
+	margin-top: 10px;
+	color: var(--text-faint);
+	font-size: var(--font-smaller);
+	font-family: var(--font-monospace);
+	word-break: break-word;
+}
+.beads-editor-section {
+	margin: 18px 0 6px;
+	font-size: var(--font-smaller);
+	font-weight: var(--font-semibold);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--text-muted);
+}
+.beads-editor-cerr {
+	color: var(--text-error);
+	margin-top: 8px;
 }
 
-/* Detail modal — dependency sections */
-.beads-detail-deps h4 {
-	margin: 12px 0 4px;
-}
+/* Dependency lists (shared by editor) */
 .beads-dep-list {
 	display: flex;
 	flex-direction: column;
@@ -282,9 +308,36 @@
 	min-width: 0;
 	word-break: break-word;
 }
-.beads-detail-deps-err {
-	color: var(--text-error);
-	margin-top: 8px;
+/* Comments (read-only, markdown) */
+.beads-comment {
+	border-left: 2px solid var(--background-modifier-border);
+	padding: 1px 0 1px 10px;
+	margin: 8px 0;
+}
+.beads-comment-head {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	font-size: var(--font-smaller);
+	margin-bottom: 2px;
+}
+.beads-comment-author {
+	font-weight: var(--font-semibold);
+	color: var(--text-normal);
+}
+.beads-comment-date {
+	font-family: var(--font-monospace);
+	color: var(--text-faint);
+}
+.beads-comment-body {
+	color: var(--text-normal);
+	word-break: break-word;
+}
+.beads-comment-body > :first-child {
+	margin-top: 0;
+}
+.beads-comment-body > :last-child {
+	margin-bottom: 0;
 }
 
 /* Quick-capture modal */
@@ -304,15 +357,6 @@
 	justify-content: space-between;
 	gap: 8px;
 	margin-top: 12px;
-}
-
-/* Detail modal provenance line */
-.beads-detail-meta {
-	margin-top: 10px;
-	color: var(--text-faint);
-	font-size: var(--font-smaller);
-	font-family: var(--font-monospace);
-	word-break: break-word;
 }
 
 /* `beads` code block embed */

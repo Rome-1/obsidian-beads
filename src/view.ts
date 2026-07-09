@@ -5,7 +5,6 @@ import type BeadsPlugin from "./main";
 import { BeadIssue, VIEW_TYPE_BEADS } from "./types";
 import { bdReady, bdBlocked, bdByStatus, bdStatusCounts, BdError, BdOptions } from "./bd";
 import { renderIssueRow } from "./row";
-import { BeadDetailModal } from "./detail";
 import { BeadCaptureModal } from "./capture";
 
 interface TabDef {
@@ -184,7 +183,7 @@ export class BeadsView extends ItemView {
 	}
 
 	private openBead(issue: BeadIssue): void {
-		new BeadDetailModal(this.app, this.plugin, issue.id).open();
+		void this.plugin.openBead(issue.id);
 	}
 
 	// --- render ---------------------------------------------------------

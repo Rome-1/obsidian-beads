@@ -2,13 +2,14 @@
 
 A tiny, **desktop-only** Obsidian plugin that renders a **live, clickable pane** for the
 [Beads (`bd`)](https://github.com/gastownhall/beads) issue tracker — and does *real*
-integration: **close an issue straight from a checkbox.**
+integration: click any issue to **edit it in a tab**, as YAML frontmatter + a markdown
+body, and save straight back to `bd`.
 
 No Obsidian + Beads plugin existed before this one — it fills a genuine gap for anyone
 who tracks work in `bd` and lives in Obsidian.
 
-<!-- Demo GIF — record a short loop (open pane → tick a checkbox → issue closes) and
-     drop it at assets/demo.gif. See docs/RELEASE.md. -->
+<!-- Demo GIF — record a short loop (open pane → click a row → edit a field / the
+     markdown body → save) and drop it at assets/demo.gif. See docs/RELEASE.md. -->
 ![Beads pane demo](assets/demo.gif)
 
 ## Features
@@ -18,9 +19,12 @@ who tracks work in `bd` and lives in Obsidian.
   can do right now*. Only the active tab hits `bd`, and each paginates with **Load
   more**, so the pane opens fast even with thousands of closed issues. Blocked rows show
   a `⛓ n` hint.
-- ✏️ **Edit on click** — click a row to open the detail modal (`bd show`) and change
-  title, type, priority, status (close/reopen here), and description (`bd update`); it
-  also shows **Blocked by** / **Blocks** dependency lists (click any to jump to it).
+- ✏️ **Edit in a tab** — click a row and the bead opens like a note (not a popup): a
+  **YAML frontmatter** block for the fields (title, type, priority, status — set it to
+  `closed` to close, or back to `open` to reopen) and a **markdown body** for the
+  description. Save (or ⌘/Ctrl-S) writes only the changed fields via `bd update`; broken
+  frontmatter is reported, never silently dropped. **Blocked by** / **Blocks**
+  dependencies and the **comment thread** (rendered markdown) show below.
 - ⚡ **Quick capture** — *Beads: Capture a bead* (or the `+` in the pane) opens a box:
   type a title and press Enter for the fast path, or set type / priority / description
   first (`bd create`).
@@ -60,9 +64,10 @@ Settings → Community plugins → Browse → search **"Beads"** → Install →
 2. Open the pane: click the **list-checks** ribbon icon, or run **"Beads: Open Beads
    pane"** from the command palette. Switch tabs (Ready / In progress / Blocked /
    Closed) and use **Load more** to page through long lists.
-3. Click a row to open its detail modal, where you can edit any field — title, type,
-   priority, **status** (set it to `closed` to close, or back to `open` to reopen) and
-   description — and see its dependencies.
+3. Click a row to open the bead in an editor tab. Edit the **YAML frontmatter** (title,
+   type, priority, **status** — set it to `closed` to close, or back to `open` to
+   reopen) and the **markdown body** (the description), then **Save** (or ⌘/Ctrl-S).
+   Dependencies and the comment thread show below.
 4. Capture new work anytime with **"Beads: Capture a bead"** (bind it to a hotkey) or
    the `+` in the pane header.
 
@@ -113,9 +118,9 @@ a timer — and share a global read cache, so many blocks won't hammer `bd`.
   path**.
 - **"No bd database here."** The project root must be a directory that contains a
   `.beads/` folder. Point it at your `bd` project (not necessarily your vault).
-- **Nothing happens when I tick a blocked issue.** `bd` won't close an issue that still
-  has open blockers; the error is shown as a notice. Close its blockers first (the detail
-  modal lists them), or change its status from the detail modal.
+- **`bd` won't close a blocked issue.** It won't close an issue that still has open
+  blockers; the error is shown as a notice. Close its blockers first (the editor tab
+  lists them under **Blocked by** — click one to jump to it).
 - **The pane didn't update after a CLI change.** It refreshes on an interval and when
   `.beads/` changes on disk; hit the refresh icon to force it.
 
@@ -127,10 +132,11 @@ a timer — and share a global read cache, so many blocks won't hammer `bd`.
   you trust.
 - Commands are invoked with `execFile` and an **argument array** — never a shell
   string — so issue IDs and other values can't inject shell metacharacters.
-- Issue titles and descriptions render as plain text (never HTML), so a bead authored
-  elsewhere and synced in can't inject markup into the pane. Data-controlled values are
-  also passed after a `--` sentinel (or as `--flag=value`) so they can't be reparsed as
-  `bd` flags.
+- Issue titles and descriptions render as plain text (never HTML) in the pane, so a bead
+  authored elsewhere and synced in can't inject markup. Comment threads in the editor
+  render through Obsidian's own `MarkdownRenderer` — the same sanitized path as any note.
+  Data-controlled values are also passed after a `--` sentinel (or as `--flag=value`) so
+  they can't be reparsed as `bd` flags.
 - The plugin runs `bd` against whatever `.beads/` your project root points at (including
   an auto-detected vault-local one). It never executes anything *from* the dataset — but
   that means you trust `bd`'s own parsing of that database, as with any `bd` invocation.

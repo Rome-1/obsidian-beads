@@ -9,7 +9,6 @@ import {
 	BdOptions,
 } from "./bd";
 import { renderIssueRow } from "./row";
-import { BeadDetailModal } from "./detail";
 
 type Source = "ready" | "blocked" | "list" | "query";
 
@@ -141,8 +140,7 @@ export function registerBeadsCodeBlock(plugin: BeadsPlugin): void {
 				}
 				for (const issue of issues) {
 					renderIssueRow(list, issue, {
-						onOpen: (i) =>
-							new BeadDetailModal(plugin.app, plugin, i.id).open(),
+						onOpen: (i) => void plugin.openBead(i.id),
 						showDeps: cfg.source === "blocked",
 					});
 				}

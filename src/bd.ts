@@ -352,6 +352,33 @@ export async function bdUpdate(
 	invalidateReadCache();
 }
 
+export interface BdComment {
+	id?: string;
+	issue_id?: string;
+	author?: string;
+	text?: string;
+	created_at?: string;
+}
+
+/**
+ * `bd comments --json -- <id>` — the comment thread on an issue, oldest first.
+ * Read-only: the editor renders each comment's text as markdown.
+ */
+export async function bdComments(
+	opts: BdOptions,
+	id: string,
+): Promise<BdComment[]> {
+	const { stdout } = await run(["comments", "--json", "--", id], opts);
+	const trimmed = stdout.trim();
+	if (!trimmed) return [];
+	try {
+		const parsed = JSON.parse(trimmed);
+		return Array.isArray(parsed) ? (parsed as BdComment[]) : [];
+	} catch (e) {
+		throw new BdError(`Could not parse bd comments JSON: ${String(e)}`);
+	}
+}
+
 /** Cheap probe used to validate settings: `bd --version`. */
 export async function bdVersion(opts: BdOptions): Promise<string> {
 	const { stdout } = await run(["--version"], { ...opts, timeoutMs: 5_000 });

@@ -7,7 +7,8 @@ import {
 	BeadsSettingTab,
 } from "./settings";
 import { BeadsView } from "./view";
-import { VIEW_TYPE_BEADS } from "./types";
+import { BeadEditorView } from "./editor";
+import { VIEW_TYPE_BEADS, VIEW_TYPE_BEADS_EDITOR } from "./types";
 import { bdReadyCount, invalidateReadCache } from "./bd";
 import { BeadCaptureModal } from "./capture";
 import { registerBeadsCodeBlock } from "./codeblock";
@@ -29,6 +30,11 @@ export default class BeadsPlugin extends Plugin {
 		this.registerView(
 			VIEW_TYPE_BEADS,
 			(leaf) => new BeadsView(leaf, this),
+		);
+
+		this.registerView(
+			VIEW_TYPE_BEADS_EDITOR,
+			(leaf) => new BeadEditorView(leaf, this),
 		);
 
 		this.addRibbonIcon("list-checks", "Open Beads pane", () => {
@@ -98,6 +104,29 @@ export default class BeadsPlugin extends Plugin {
 			});
 		}
 		if (leaf) workspace.revealLeaf(leaf);
+	}
+
+	/**
+	 * Open a bead in the embedded editor as a main-area tab (like opening a
+	 * note). If an editor for the same bead is already open, reveal it instead
+	 * of stacking another tab.
+	 */
+	async openBead(id: string): Promise<void> {
+		const { workspace } = this.app;
+		for (const leaf of workspace.getLeavesOfType(VIEW_TYPE_BEADS_EDITOR)) {
+			const state = leaf.getViewState().state as { id?: string } | undefined;
+			if (state?.id === id) {
+				workspace.revealLeaf(leaf);
+				return;
+			}
+		}
+		const leaf = workspace.getLeaf("tab");
+		await leaf.setViewState({
+			type: VIEW_TYPE_BEADS_EDITOR,
+			active: true,
+			state: { id },
+		});
+		workspace.revealLeaf(leaf);
 	}
 
 	/** Refresh every open Beads pane, and the status-bar ready count. */
