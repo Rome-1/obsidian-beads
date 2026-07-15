@@ -3,13 +3,17 @@ import {
 	WorkspaceLeaf,
 	Notice,
 	MarkdownRenderer,
-	parseYaml,
-	stringifyYaml,
 } from "obsidian";
 import { existsSync } from "fs";
 import { join } from "path";
 import type BeadsPlugin from "./main";
-import { BeadIssue, VIEW_TYPE_BEADS_EDITOR } from "./types";
+import {
+	BeadIssue,
+	VIEW_TYPE_BEADS_EDITOR,
+	ISSUE_TYPES,
+	PRIORITIES,
+	EDITABLE_STATUSES,
+} from "./types";
 import { renderPriorityDot } from "./row";
 import {
 	bdShow,
@@ -25,27 +29,33 @@ interface EditorState {
 	id?: string;
 }
 
-interface ParsedFields {
+/** The editable snapshot of a bead's fields. */
+interface EditModel {
 	title: string;
-	type: string;
-	priority: number;
 	status: string;
+	priority: number;
+	type: string;
+	assignee: string;
+	labels: string[];
+	description: string;
 }
 
 /**
- * Embedded bead editor. Opens as a normal main-area tab (not a popup): the bead
- * is shown as a single markdown document — a YAML frontmatter block for the
- * fields, then the description as a markdown body. Save parses that back and
- * writes only the changed fields via `bd update`; broken frontmatter is
- * reported, never silently dropped. Dependencies and the comment thread render
- * read-only below.
+ * Embedded bead editor. Opens as a normal main-area tab (not a popup) and reads
+ * like a native Obsidian note: a title, a Properties panel of typed controls
+ * (status / priority / type / assignee / labels), then a markdown description
+ * body. Save writes only the fields that changed via `bd update`. Dependencies
+ * and the comment thread render read-only below.
  */
 export class BeadEditorView extends ItemView {
 	private id: string | null = null;
 	private issue: BeadIssue | null = null;
-	private origText = "";
-	private textarea: HTMLTextAreaElement | null = null;
 	private loadSeq = 0;
+
+	private model: EditModel = blankModel();
+	private orig: EditModel = blankModel();
+	private saveBtn: HTMLButtonElement | null = null;
+	private revertBtn: HTMLButtonElement | null = null;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -77,9 +87,15 @@ export class BeadEditorView extends ItemView {
 	}
 
 	async onOpen(): Promise<void> {
+		// Save from anywhere in the view with Cmd/Ctrl-S. Registered once here
+		// (not per-render) so revert/re-render can't stack duplicate handlers.
+		this.registerDomEvent(this.contentEl, "keydown", (e) => {
+			if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+				e.preventDefault();
+				void this.save();
+			}
+		});
 		// setState (which supplies the bead id) may land before or after onOpen.
-		// If the id isn't known yet, show a neutral placeholder and let setState
-		// drive the load, rather than flashing "No bead selected".
 		if (this.id) await this.reload();
 		else this.message("Loading…");
 	}
@@ -129,68 +145,12 @@ export class BeadEditorView extends ItemView {
 			}
 			this.issue = issue;
 			this.render();
-			// Refresh the tab title now that we know the issue's title.
 			const leaf = this.leaf as unknown as { updateHeader?: () => void };
 			leaf.updateHeader?.();
 		} catch (e) {
 			if (seq !== this.loadSeq) return;
 			this.message(e instanceof BdError ? e.message : String(e), true);
 		}
-	}
-
-	// --- serialization ---------------------------------------------------
-
-	/** A bead as an editable `--- yaml --- \n body` markdown document. */
-	private serialize(issue: BeadIssue): string {
-		const fm = stringifyYaml({
-			title: issue.title ?? "",
-			type: issue.issue_type ?? "task",
-			priority: issue.priority ?? 2,
-			status: issue.status ?? "open",
-		});
-		const body = issue.description ?? "";
-		return `---\n${fm}---\n${body ? `${body}\n` : ""}`;
-	}
-
-	/**
-	 * Parse the document back into fields + description. Returns a friendly
-	 * error string (rather than throwing) so `save` can complain via a Notice
-	 * and leave the user's text untouched to fix.
-	 */
-	private parseDoc(
-		text: string,
-	): { fields: ParsedFields; description: string } | { error: string } {
-		const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n?([\s\S]*)$/);
-		if (!m) {
-			return {
-				error: "Keep the frontmatter block: a `---` line, the fields, a `---` line, then the description.",
-			};
-		}
-		let obj: unknown;
-		try {
-			obj = parseYaml(m[1]);
-		} catch (e) {
-			return {
-				error: `Couldn't parse the frontmatter YAML — ${(e as Error).message}. Fix it and save again.`,
-			};
-		}
-		if (!obj || typeof obj !== "object") {
-			return { error: "Frontmatter is empty or not `key: value` pairs." };
-		}
-		const rec = obj as Record<string, unknown>;
-		const title = String(rec.title ?? "").trim();
-		if (!title) return { error: "`title:` is required in the frontmatter." };
-
-		const cur = this.issue;
-		const type = String(rec.type ?? cur?.issue_type ?? "task").trim();
-		const status = String(rec.status ?? cur?.status ?? "open").trim();
-		let priority = Number.parseInt(String(rec.priority ?? cur?.priority ?? 2), 10);
-		if (!Number.isFinite(priority)) priority = cur?.priority ?? 2;
-		priority = Math.max(0, Math.min(4, priority)); // coerce into range, don't reject
-
-		// Drop trailing blank lines the editor tends to add; keep inner content.
-		const description = m[2].replace(/\n+$/, "");
-		return { fields: { title, type, priority, status }, description };
 	}
 
 	// --- render ----------------------------------------------------------
@@ -201,47 +161,96 @@ export class BeadEditorView extends ItemView {
 		const root = this.contentEl;
 		root.empty();
 		root.addClass("beads-editor");
-		this.origText = this.serialize(issue);
 
-		// Toolbar: id + Save / Revert.
+		// Editable snapshot + a pristine copy to diff / revert against.
+		this.model = modelFromIssue(issue);
+		this.orig = cloneModel(this.model);
+
+		// Toolbar: id + Revert / Save.
 		const bar = root.createDiv({ cls: "beads-editor-bar" });
 		bar.createDiv({ cls: "beads-editor-id", text: issue.id });
 		const actions = bar.createDiv({ cls: "beads-editor-actions" });
-		const revertBtn = actions.createEl("button", { text: "Revert" });
-		const saveBtn = actions.createEl("button", { cls: "mod-cta", text: "Save" });
-		saveBtn.disabled = true;
-		revertBtn.disabled = true;
+		this.revertBtn = actions.createEl("button", { text: "Revert" });
+		this.saveBtn = actions.createEl("button", { cls: "mod-cta", text: "Save" });
+		this.saveBtn.disabled = true;
+		this.revertBtn.disabled = true;
+		this.saveBtn.onclick = () => void this.save();
+		this.revertBtn.onclick = () => this.render(); // re-derive from this.issue
 
-		root.createDiv({
-			cls: "beads-editor-hint",
-			text: "YAML frontmatter for the fields · markdown body for the description. ⌘/Ctrl-S to save.",
+		// Title — prominent, like a note's inline title.
+		const titleInput = root.createEl("input", {
+			cls: "beads-editor-title",
+			type: "text",
+			attr: { placeholder: "Title", "aria-label": "Title" },
+		});
+		titleInput.value = this.model.title;
+		titleInput.addEventListener("input", () => {
+			this.model.title = titleInput.value;
+			this.syncDirty();
 		});
 
-		const ta = root.createEl("textarea", { cls: "beads-editor-text" });
-		ta.value = this.origText;
-		ta.spellcheck = false;
-		this.textarea = ta;
-
-		const syncDirty = (): void => {
-			const dirty = ta.value !== this.origText;
-			saveBtn.disabled = !dirty;
-			revertBtn.disabled = !dirty;
-		};
-		ta.addEventListener("input", syncDirty);
-		ta.addEventListener("keydown", (e) => {
-			if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
-				e.preventDefault();
-				void this.save(saveBtn);
-			}
+		// Properties panel — typed controls, styled like note Properties.
+		const props = root.createDiv({ cls: "beads-props" });
+		this.propRow(props, "Status", (cell) => {
+			const sel = this.select(
+				cell,
+				EDITABLE_STATUSES.map((s) => ({ value: s, label: s })),
+				this.model.status,
+			);
+			sel.addEventListener("change", () => {
+				this.model.status = sel.value;
+				this.syncDirty();
+			});
 		});
-		saveBtn.onclick = () => void this.save(saveBtn);
-		revertBtn.onclick = () => {
-			ta.value = this.origText;
-			syncDirty();
-			ta.focus();
-		};
+		this.propRow(props, "Priority", (cell) => {
+			const sel = this.select(
+				cell,
+				PRIORITIES.map((p) => ({ value: String(p.value), label: p.label })),
+				String(this.model.priority),
+			);
+			sel.addEventListener("change", () => {
+				this.model.priority = Number(sel.value);
+				this.syncDirty();
+			});
+		});
+		this.propRow(props, "Type", (cell) => {
+			const sel = this.select(
+				cell,
+				ISSUE_TYPES.map((t) => ({ value: t, label: t })),
+				this.model.type,
+			);
+			sel.addEventListener("change", () => {
+				this.model.type = sel.value;
+				this.syncDirty();
+			});
+		});
+		this.propRow(props, "Assignee", (cell) => {
+			const inp = cell.createEl("input", {
+				cls: "beads-prop-input",
+				type: "text",
+				attr: { placeholder: "unassigned" },
+			});
+			inp.value = this.model.assignee;
+			inp.addEventListener("input", () => {
+				this.model.assignee = inp.value;
+				this.syncDirty();
+			});
+		});
+		this.propRow(props, "Labels", (cell) => this.renderLabels(cell));
 
-		// Provenance.
+		// Description — a comfortable, note-style body (not a monospace blob).
+		root.createDiv({ cls: "beads-editor-section", text: "Description" });
+		const ta = root.createEl("textarea", {
+			cls: "beads-editor-desc",
+			attr: { placeholder: "Add a description…" },
+		});
+		ta.value = this.model.description;
+		ta.addEventListener("input", () => {
+			this.model.description = ta.value;
+			this.syncDirty();
+		});
+
+		// Provenance (read-only).
 		const metaBits = [
 			issue.owner ? `owner ${issue.owner}` : "",
 			issue.created_at ? `created ${issue.created_at}` : "",
@@ -256,54 +265,131 @@ export class BeadEditorView extends ItemView {
 		void this.loadComments(root.createDiv({ cls: "beads-editor-comments" }));
 	}
 
-	private async save(saveBtn: HTMLButtonElement): Promise<void> {
-		const ta = this.textarea;
+	private propRow(
+		grid: HTMLElement,
+		label: string,
+		build: (cell: HTMLElement) => void,
+	): void {
+		grid.createDiv({ cls: "beads-prop-key", text: label });
+		build(grid.createDiv({ cls: "beads-prop-val" }));
+	}
+
+	private select(
+		cell: HTMLElement,
+		options: { value: string; label: string }[],
+		current: string,
+	): HTMLSelectElement {
+		const sel = cell.createEl("select", { cls: "dropdown beads-prop-input" });
+		// Preserve an out-of-set current value (e.g. an unusual stored status).
+		if (!options.some((o) => o.value === current)) {
+			sel.createEl("option", { value: current, text: current });
+		}
+		for (const o of options) sel.createEl("option", { value: o.value, text: o.label });
+		sel.value = current;
+		return sel;
+	}
+
+	private renderLabels(cell: HTMLElement): void {
+		cell.empty();
+		const wrap = cell.createDiv({ cls: "beads-labels" });
+		for (const label of this.model.labels) {
+			const chip = wrap.createSpan({ cls: "beads-label-chip" });
+			chip.createSpan({ text: label });
+			const x = chip.createSpan({ cls: "beads-label-x", text: "×" });
+			x.setAttr("aria-label", `Remove ${label}`);
+			x.onclick = () => {
+				this.model.labels = this.model.labels.filter((l) => l !== label);
+				this.renderLabels(cell);
+				this.syncDirty();
+			};
+		}
+		const add = wrap.createEl("input", {
+			cls: "beads-label-add",
+			type: "text",
+			attr: { placeholder: "+ label", "aria-label": "Add label" },
+		});
+		add.addEventListener("keydown", (e) => {
+			if (e.key !== "Enter") return;
+			e.preventDefault();
+			const v = add.value.trim();
+			if (v && !this.model.labels.includes(v)) {
+				this.model.labels.push(v);
+				this.renderLabels(cell);
+				this.syncDirty();
+				(cell.querySelector(".beads-label-add") as HTMLInputElement | null)?.focus();
+			}
+		});
+	}
+
+	private syncDirty(): void {
+		const dirty = !modelsEqual(this.model, this.orig);
+		if (this.saveBtn) this.saveBtn.disabled = !dirty;
+		if (this.revertBtn) this.revertBtn.disabled = !dirty;
+	}
+
+	// --- save ------------------------------------------------------------
+
+	private async save(): Promise<void> {
 		const issue = this.issue;
-		if (!ta || !issue) return;
+		if (!issue) return;
+		if (modelsEqual(this.model, this.orig)) {
+			new Notice("Beads: no changes.");
+			return;
+		}
 		const opts = this.resolveOpts();
 		if (!opts) {
 			new Notice("Beads: no project root set.");
 			return;
 		}
-
-		const parsed = this.parseDoc(ta.value);
-		if ("error" in parsed) {
-			new Notice(`Beads: ${parsed.error}`, 8000);
+		const title = this.model.title.trim();
+		if (!title) {
+			new Notice("Beads: a title is required.");
 			return;
 		}
-		const { fields, description } = parsed;
 
 		const f: BdUpdateFields = {};
-		if (fields.title !== issue.title) f.title = fields.title;
-		if (fields.type !== issue.issue_type) f.type = fields.type;
-		if (fields.priority !== (issue.priority ?? 2)) f.priority = fields.priority;
-		if (fields.status !== issue.status) f.status = fields.status;
-		if (description.trimEnd() !== (issue.description ?? "").trimEnd()) {
-			f.description = description;
+		if (title !== issue.title) f.title = title;
+		if (this.model.type !== issue.issue_type) f.type = this.model.type;
+		if (this.model.priority !== (issue.priority ?? 2)) f.priority = this.model.priority;
+		if (this.model.status !== issue.status) f.status = this.model.status;
+		if (this.model.assignee !== (issue.assignee ?? "")) f.assignee = this.model.assignee;
+		if (this.model.description.trimEnd() !== (issue.description ?? "").trimEnd()) {
+			f.description = this.model.description;
 		}
+		const old = issue.labels ?? [];
+		const add = this.model.labels.filter((l) => !old.includes(l));
+		const rem = old.filter((l) => !this.model.labels.includes(l));
+		if (add.length) f.addLabels = add;
+		if (rem.length) f.removeLabels = rem;
+
 		if (Object.keys(f).length === 0) {
 			new Notice("Beads: no changes.");
 			return;
 		}
 
-		saveBtn.disabled = true;
-		saveBtn.setText("Saving…");
+		const saveBtn = this.saveBtn;
+		if (saveBtn) {
+			saveBtn.disabled = true;
+			saveBtn.setText("Saving…");
+		}
 		try {
 			await bdUpdate(opts, issue.id, f);
 			new Notice(`Beads: updated ${issue.id}`);
 			this.plugin.refreshViews();
-			await this.reload(); // reflect canonical stored values (status, updated_at)
+			await this.reload(); // reflect canonical stored values (updated_at, etc.)
 		} catch (e) {
 			new Notice(
 				`Beads: ${e instanceof BdError ? e.message : `Update failed: ${String(e)}`}`,
 				8000,
 			);
-			saveBtn.disabled = false;
-			saveBtn.setText("Save");
+			if (saveBtn) {
+				saveBtn.disabled = false;
+				saveBtn.setText("Save");
+			}
 		}
 	}
 
-	// --- dependencies ----------------------------------------------------
+	// --- dependencies (read-only) ----------------------------------------
 
 	private async loadDeps(container: HTMLElement): Promise<void> {
 		const opts = this.resolveOpts();
@@ -372,8 +458,50 @@ export class BeadEditorView extends ItemView {
 				head.createSpan({ cls: "beads-comment-date", text: c.created_at });
 			}
 			const bodyEl = card.createDiv({ cls: "beads-comment-body" });
-			// Comment text renders as markdown; MarkdownRenderer inserts inert DOM.
 			await MarkdownRenderer.render(this.app, c.text ?? "", bodyEl, "", this);
 		}
 	}
+}
+
+// --- model helpers -------------------------------------------------------
+
+function blankModel(): EditModel {
+	return {
+		title: "",
+		status: "open",
+		priority: 2,
+		type: "task",
+		assignee: "",
+		labels: [],
+		description: "",
+	};
+}
+
+function modelFromIssue(issue: BeadIssue): EditModel {
+	return {
+		title: issue.title ?? "",
+		status: issue.status ?? "open",
+		priority: issue.priority ?? 2,
+		type: issue.issue_type ?? "task",
+		assignee: issue.assignee ?? "",
+		labels: [...(issue.labels ?? [])],
+		description: issue.description ?? "",
+	};
+}
+
+function cloneModel(m: EditModel): EditModel {
+	return { ...m, labels: [...m.labels] };
+}
+
+function modelsEqual(a: EditModel, b: EditModel): boolean {
+	return (
+		a.title === b.title &&
+		a.status === b.status &&
+		a.priority === b.priority &&
+		a.type === b.type &&
+		a.assignee === b.assignee &&
+		a.description === b.description &&
+		a.labels.length === b.labels.length &&
+		a.labels.every((l, i) => l === b.labels[i])
+	);
 }

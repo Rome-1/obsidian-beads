@@ -333,6 +333,11 @@ export interface BdUpdateFields {
 	priority?: number;
 	type?: string;
 	status?: string;
+	/** New assignee; empty string clears it. `undefined` = leave unchanged. */
+	assignee?: string;
+	/** Labels to add / remove (diff form — `--set-labels=` can't clear). */
+	addLabels?: string[];
+	removeLabels?: string[];
 }
 
 /** `bd update <flags> -- <id>` — change any subset of an issue's fields. */
@@ -342,11 +347,16 @@ export async function bdUpdate(
 	f: BdUpdateFields,
 ): Promise<void> {
 	const args = ["update"];
+	// `--flag=value` form keeps every value a single argv token, so a value
+	// starting with `-` (or containing spaces/newlines) is taken verbatim.
 	if (f.title !== undefined) args.push(`--title=${f.title}`);
 	if (f.description !== undefined) args.push(`--description=${f.description}`);
 	if (f.priority !== undefined) args.push(`--priority=${f.priority}`);
 	if (f.type !== undefined) args.push(`--type=${f.type}`);
 	if (f.status !== undefined) args.push(`--status=${f.status}`);
+	if (f.assignee !== undefined) args.push(`--assignee=${f.assignee}`);
+	for (const l of f.addLabels ?? []) args.push(`--add-label=${l}`);
+	for (const l of f.removeLabels ?? []) args.push(`--remove-label=${l}`);
 	args.push("--", id);
 	await run(args, opts);
 	invalidateReadCache();

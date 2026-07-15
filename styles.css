@@ -232,23 +232,94 @@
 	display: flex;
 	gap: 6px;
 }
-.beads-editor-hint {
-	color: var(--text-muted);
-	font-size: var(--font-smaller);
-	margin-bottom: 8px;
-}
-.beads-editor-text {
-	flex: 1 1 auto;
+/* Title — like a note's inline title */
+.beads-editor-title {
 	width: 100%;
-	/* Fills the tab (flex above), never smaller than this even in a short pane. */
-	min-height: 340px;
-	resize: vertical;
-	font-family: var(--font-monospace);
+	border: none;
+	background: transparent;
+	padding: 2px 0;
+	margin: 4px 0 10px;
+	font-size: 1.7em;
+	font-weight: var(--font-bold, 700);
+	font-family: var(--font-text);
+	color: var(--text-normal);
+	line-height: 1.2;
+}
+.beads-editor-title:focus {
+	box-shadow: none;
+}
+
+/* Properties panel — typed field rows, like note Properties */
+.beads-props {
+	display: grid;
+	grid-template-columns: 92px 1fr;
+	align-items: center;
+	gap: 7px 12px;
+	padding: 10px 0;
+	border-top: 1px solid var(--background-modifier-border);
+	border-bottom: 1px solid var(--background-modifier-border);
+	margin-bottom: 6px;
+}
+.beads-prop-key {
+	color: var(--text-muted);
 	font-size: var(--font-ui-small);
-	line-height: 1.6;
-	tab-size: 2;
-	padding: 12px 14px;
+}
+.beads-prop-val {
+	min-width: 0;
+	display: flex;
+	align-items: center;
+}
+.beads-prop-input {
+	width: 100%;
+	max-width: 340px;
+}
+select.beads-prop-input {
+	max-width: 220px;
+}
+
+/* Label chips */
+.beads-labels {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+}
+.beads-label-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 1px 4px 1px 8px;
+	border-radius: 10px;
+	background: var(--background-modifier-hover);
+	border: 1px solid var(--background-modifier-border);
+	font-size: var(--font-smaller);
+}
+.beads-label-x {
+	cursor: pointer;
+	color: var(--text-muted);
+	line-height: 1;
+	padding: 0 2px;
+}
+.beads-label-x:hover {
+	color: var(--text-error);
+}
+.beads-label-add {
+	width: 96px;
+	font-size: var(--font-smaller);
+	padding: 2px 6px;
+}
+
+/* Description — note-style body, not a monospace blob */
+.beads-editor-desc {
+	width: 100%;
+	min-height: 240px;
+	resize: vertical;
+	font-family: var(--font-text);
+	font-size: var(--font-text-size);
+	line-height: var(--line-height-normal, 1.6);
+	padding: 10px 12px;
 	border-radius: 8px;
+	margin-top: 2px;
 }
 .beads-editor-meta {
 	margin-top: 10px;
