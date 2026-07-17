@@ -1,6 +1,6 @@
 {
   "name": "obsidian-beads",
-  "version": "0.0.1",
+  "version": "0.0.4",
   "description": "A live, clickable pane for the Beads (bd) issue tracker inside Obsidian. Desktop only.",
   "main": "main.js",
   "scripts": {
@@ -14,7 +14,7 @@
     "beads",
     "issue-tracker"
   ],
-  "author": "Rome-1",
+  "author": "Rome Thorstenson",
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^20.12.0",

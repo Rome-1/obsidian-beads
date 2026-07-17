@@ -1,10 +1,10 @@
 {
   "id": "beads-pane",
   "name": "Beads",
-  "version": "0.0.1",
+  "version": "0.0.4",
   "minAppVersion": "1.5.0",
-  "description": "A live, clickable pane for the Beads (bd) issue tracker. Shells out to the bd CLI and lets you close issues from a checkbox. Desktop only.",
-  "author": "Rome-1",
+  "description": "A live pane and editor for the Beads (bd) issue tracker — see what's ready, edit issues inline, and embed live queries in your notes. Desktop only.",
+  "author": "Rome Thorstenson",
   "authorUrl": "https://github.com/Rome-1",
   "isDesktopOnly": true
 }

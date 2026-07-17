@@ -6,10 +6,10 @@ Everything below is **Rome's** to run — it needs a public repo, a GitHub relea
 
 ---
 
-## 0. Pre-flight (agent-preparable — already done for 0.0.1)
+## 0. Pre-flight (agent-preparable — already done for 0.0.4)
 
 - [x] `manifest.json` present at repo root and compliant (see **Manifest compliance** below).
-- [x] `versions.json` maps the plugin version → `minAppVersion` (`{"0.0.1": "1.5.0"}`).
+- [x] `versions.json` maps the plugin version → `minAppVersion` (`{"0.0.4": "1.5.0"}`).
 - [x] `README.md` (features, install, usage, security) and `LICENSE` (MIT) present.
 - [x] `npm run build` produces `main.js` with no typecheck errors.
 - [ ] **Demo GIF** recorded and committed at `assets/demo.gif` (see `assets/README.md`).
@@ -40,11 +40,11 @@ The version tag **must exactly match** `manifest.json`'s `version` — **no `v` 
 
 ```bash
 npm run build          # produces a fresh production main.js
-git tag 0.0.1
-git push origin 0.0.1
+git tag 0.0.4
+git push origin 0.0.4
 ```
 
-Then create the GitHub release for tag `0.0.1` and **attach these as individual binary
+Then create the GitHub release for tag `0.0.4` and **attach these as individual binary
 files** (not zipped, not in a subfolder):
 
 - `main.js`
@@ -63,7 +63,7 @@ files** (not zipped, not in a subfolder):
    {
      "id": "beads-pane",
      "name": "Beads",
-     "author": "Rome-1",
+     "author": "Rome Thorstenson",
      "description": "A live, clickable pane for the Beads (bd) issue tracker. Shells out to the bd CLI and lets you close issues from a checkbox. Desktop only.",
      "repo": "Rome-1/obsidian-beads"
    }
@@ -79,7 +79,7 @@ files** (not zipped, not in a subfolder):
 
 ---
 
-## Manifest compliance (verified for 0.0.1)
+## Manifest compliance (verified for 0.0.4)
 
 Checked against the obsidian-releases plugin requirements:
 
@@ -90,7 +90,7 @@ Checked against the obsidian-releases plugin requirements:
 | `description` | *(one sentence)* | no "Obsidian"/"plugin", < 250 chars, not "A plugin that…" | ✅ |
 | `author` | `Rome-1` | present | ✅ |
 | `authorUrl` | `https://github.com/Rome-1` | profile URL (not the repo, not obsidian.md) | ✅ |
-| `version` | `0.0.1` | semver, no `v` prefix | ✅ |
+| `version` | `0.0.4` | semver, no `v` prefix | ✅ |
 | `minAppVersion` | `1.5.0` | valid, present in `versions.json` | ✅ |
 | `isDesktopOnly` | `true` | required (uses `child_process`) | ✅ |
 
