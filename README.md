@@ -8,8 +8,6 @@ body, and save straight back to `bd`.
 No Obsidian + Beads plugin existed before this one — it fills a genuine gap for anyone
 who tracks work in `bd` and lives in Obsidian.
 
-<!-- Demo GIF — record a short loop (open pane → click a row → edit a field / the
-     markdown body → save) and drop it at assets/demo.gif. See docs/RELEASE.md. -->
 ![Beads pane demo](assets/demo.gif)
 
 ## Features
