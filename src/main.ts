@@ -10,7 +10,6 @@ import { BeadsView } from "./view";
 import { BeadEditorView } from "./editor";
 import { VIEW_TYPE_BEADS, VIEW_TYPE_BEADS_EDITOR } from "./types";
 import { bdReadyCount, invalidateReadCache } from "./bd";
-import { BeadCaptureModal } from "./capture";
 import { registerBeadsCodeBlock } from "./codeblock";
 
 export default class BeadsPlugin extends Plugin {
@@ -49,8 +48,8 @@ export default class BeadsPlugin extends Plugin {
 
 		this.addCommand({
 			id: "capture-bead",
-			name: "Capture a bead",
-			callback: () => new BeadCaptureModal(this.app, this).open(),
+			name: "New bead",
+			callback: () => void this.newBead(),
 		});
 
 		this.addCommand({
@@ -125,6 +124,18 @@ export default class BeadsPlugin extends Plugin {
 			type: VIEW_TYPE_BEADS_EDITOR,
 			active: true,
 			state: { id },
+		});
+		workspace.revealLeaf(leaf);
+	}
+
+	/** Open a blank editor tab to create a new bead (same surface as editing). */
+	async newBead(): Promise<void> {
+		const { workspace } = this.app;
+		const leaf = workspace.getLeaf("tab");
+		await leaf.setViewState({
+			type: VIEW_TYPE_BEADS_EDITOR,
+			active: true,
+			state: { create: true },
 		});
 		workspace.revealLeaf(leaf);
 	}

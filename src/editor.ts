@@ -18,6 +18,7 @@ import { renderPriorityDot } from "./row";
 import {
 	bdShow,
 	bdUpdate,
+	bdCreate,
 	bdDepList,
 	bdComments,
 	BdUpdateFields,
@@ -27,6 +28,8 @@ import {
 
 interface EditorState {
 	id?: string;
+	/** Open a blank editor to create a new bead (no id yet). */
+	create?: boolean;
 }
 
 /** The editable snapshot of a bead's fields. */
@@ -50,6 +53,7 @@ interface EditModel {
 export class BeadEditorView extends ItemView {
 	private id: string | null = null;
 	private issue: BeadIssue | null = null;
+	private creating = false;
 	private loadSeq = 0;
 
 	private model: EditModel = blankModel();
@@ -72,15 +76,20 @@ export class BeadEditorView extends ItemView {
 	}
 	getDisplayText(): string {
 		if (this.issue) return this.issue.title || this.issue.id;
+		if (this.creating) return "New bead";
 		return this.id ?? "Bead";
 	}
 
 	getState(): Record<string, unknown> {
-		return { id: this.id ?? undefined };
+		return {
+			id: this.id ?? undefined,
+			create: this.creating && !this.id ? true : undefined,
+		};
 	}
 
 	async setState(state: EditorState, result: unknown): Promise<void> {
 		if (state && typeof state.id === "string") this.id = state.id;
+		if (state && state.create) this.creating = true;
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		await super.setState(state, result as any);
 		await this.reload();
@@ -95,8 +104,9 @@ export class BeadEditorView extends ItemView {
 				void this.save();
 			}
 		});
-		// setState (which supplies the bead id) may land before or after onOpen.
-		if (this.id) await this.reload();
+		// setState (which supplies the bead id or create flag) may land before
+		// or after onOpen.
+		if (this.id || this.creating) await this.reload();
 		else this.message("Loading…");
 	}
 
@@ -124,6 +134,11 @@ export class BeadEditorView extends ItemView {
 
 	/** (Re)load the bead from bd and render it. Safe to call repeatedly. */
 	private async reload(): Promise<void> {
+		if (this.creating && !this.id) {
+			this.issue = null;
+			this.render(); // blank create form
+			return;
+		}
 		if (!this.id) {
 			this.message("No bead selected.");
 			return;
@@ -156,26 +171,40 @@ export class BeadEditorView extends ItemView {
 	// --- render ----------------------------------------------------------
 
 	private render(): void {
+		const creating = this.creating && !this.issue;
 		const issue = this.issue;
-		if (!issue) return;
+		if (!creating && !issue) return;
 		const root = this.contentEl;
 		root.empty();
 		root.addClass("beads-editor");
 
 		// Editable snapshot + a pristine copy to diff / revert against.
-		this.model = modelFromIssue(issue);
+		this.model = issue ? modelFromIssue(issue) : blankModel();
 		this.orig = cloneModel(this.model);
 
-		// Toolbar: id + Revert / Save.
+		// Toolbar: id/label + actions (Create for a new bead, Revert/Save to edit).
 		const bar = root.createDiv({ cls: "beads-editor-bar" });
-		bar.createDiv({ cls: "beads-editor-id", text: issue.id });
+		bar.createDiv({
+			cls: "beads-editor-id",
+			text: issue ? issue.id : "New bead",
+		});
 		const actions = bar.createDiv({ cls: "beads-editor-actions" });
-		this.revertBtn = actions.createEl("button", { text: "Revert" });
-		this.saveBtn = actions.createEl("button", { cls: "mod-cta", text: "Save" });
-		this.saveBtn.disabled = true;
-		this.revertBtn.disabled = true;
-		this.saveBtn.onclick = () => void this.save();
-		this.revertBtn.onclick = () => this.render(); // re-derive from this.issue
+		if (creating) {
+			this.revertBtn = null;
+			this.saveBtn = actions.createEl("button", {
+				cls: "mod-cta",
+				text: "Create",
+			});
+			this.saveBtn.disabled = true;
+			this.saveBtn.onclick = () => void this.save();
+		} else {
+			this.revertBtn = actions.createEl("button", { text: "Revert" });
+			this.saveBtn = actions.createEl("button", { cls: "mod-cta", text: "Save" });
+			this.saveBtn.disabled = true;
+			this.revertBtn.disabled = true;
+			this.saveBtn.onclick = () => void this.save();
+			this.revertBtn.onclick = () => this.render(); // re-derive from this.issue
+		}
 
 		// Title — prominent, like a note's inline title.
 		const titleInput = root.createEl("input", {
@@ -191,17 +220,20 @@ export class BeadEditorView extends ItemView {
 
 		// Properties panel — typed controls, styled like note Properties.
 		const props = root.createDiv({ cls: "beads-props" });
-		this.propRow(props, "Status", (cell) => {
-			const sel = this.select(
-				cell,
-				EDITABLE_STATUSES.map((s) => ({ value: s, label: s })),
-				this.model.status,
-			);
-			sel.addEventListener("change", () => {
-				this.model.status = sel.value;
-				this.syncDirty();
+		// Status isn't set at creation (a new bead starts "open").
+		if (!creating) {
+			this.propRow(props, "Status", (cell) => {
+				const sel = this.select(
+					cell,
+					EDITABLE_STATUSES.map((s) => ({ value: s, label: s })),
+					this.model.status,
+				);
+				sel.addEventListener("change", () => {
+					this.model.status = sel.value;
+					this.syncDirty();
+				});
 			});
-		});
+		}
 		this.propRow(props, "Priority", (cell) => {
 			const sel = this.select(
 				cell,
@@ -250,19 +282,24 @@ export class BeadEditorView extends ItemView {
 			this.syncDirty();
 		});
 
-		// Provenance (read-only).
-		const metaBits = [
-			issue.owner ? `owner ${issue.owner}` : "",
-			issue.created_at ? `created ${issue.created_at}` : "",
-			issue.updated_at ? `updated ${issue.updated_at}` : "",
-		].filter(Boolean);
-		if (metaBits.length) {
-			root.createDiv({ cls: "beads-editor-meta", text: metaBits.join("  ·  ") });
+		// Provenance + dependencies + comments — only for an existing bead.
+		if (issue) {
+			const metaBits = [
+				issue.owner ? `owner ${issue.owner}` : "",
+				issue.created_at ? `created ${issue.created_at}` : "",
+				issue.updated_at ? `updated ${issue.updated_at}` : "",
+			].filter(Boolean);
+			if (metaBits.length) {
+				root.createDiv({
+					cls: "beads-editor-meta",
+					text: metaBits.join("  ·  "),
+				});
+			}
+			void this.loadDeps(root.createDiv({ cls: "beads-editor-deps" }));
+			void this.loadComments(root.createDiv({ cls: "beads-editor-comments" }));
+		} else {
+			titleInput.focus();
 		}
-
-		// Dependencies + comments (async, read-only).
-		void this.loadDeps(root.createDiv({ cls: "beads-editor-deps" }));
-		void this.loadComments(root.createDiv({ cls: "beads-editor-comments" }));
 	}
 
 	private propRow(
@@ -322,23 +359,31 @@ export class BeadEditorView extends ItemView {
 	}
 
 	private syncDirty(): void {
-		const dirty = !modelsEqual(this.model, this.orig);
-		if (this.saveBtn) this.saveBtn.disabled = !dirty;
-		if (this.revertBtn) this.revertBtn.disabled = !dirty;
+		// Creating: enabled once there's a title. Editing: enabled when changed.
+		const canAct =
+			this.creating && !this.issue
+				? this.model.title.trim().length > 0
+				: !modelsEqual(this.model, this.orig);
+		if (this.saveBtn) this.saveBtn.disabled = !canAct;
+		if (this.revertBtn) this.revertBtn.disabled = !canAct;
 	}
 
 	// --- save ------------------------------------------------------------
 
 	private async save(): Promise<void> {
+		const opts = this.resolveOpts();
+		if (!opts) {
+			new Notice("Beads: no project root set.");
+			return;
+		}
+		if (this.creating && !this.issue) {
+			await this.create(opts);
+			return;
+		}
 		const issue = this.issue;
 		if (!issue) return;
 		if (modelsEqual(this.model, this.orig)) {
 			new Notice("Beads: no changes.");
-			return;
-		}
-		const opts = this.resolveOpts();
-		if (!opts) {
-			new Notice("Beads: no project root set.");
 			return;
 		}
 		const title = this.model.title.trim();
@@ -385,6 +430,47 @@ export class BeadEditorView extends ItemView {
 			if (saveBtn) {
 				saveBtn.disabled = false;
 				saveBtn.setText("Save");
+			}
+		}
+	}
+
+	/** Create a brand-new bead from the form, then switch to editing it. */
+	private async create(opts: BdOptions): Promise<void> {
+		const title = this.model.title.trim();
+		if (!title) {
+			new Notice("Beads: a title is required.");
+			return;
+		}
+		const btn = this.saveBtn;
+		if (btn) {
+			btn.disabled = true;
+			btn.setText("Creating…");
+		}
+		try {
+			const id = await bdCreate(opts, {
+				title,
+				type: this.model.type,
+				priority: this.model.priority,
+				description: this.model.description.trim() || undefined,
+				assignee: this.model.assignee.trim() || undefined,
+				labels: this.model.labels.length ? this.model.labels : undefined,
+			});
+			new Notice(`Beads: created ${id}`);
+			this.plugin.refreshViews();
+			// Switch this same tab into edit mode on the new bead.
+			this.id = id;
+			this.creating = false;
+			await this.reload();
+			const leaf = this.leaf as unknown as { updateHeader?: () => void };
+			leaf.updateHeader?.();
+		} catch (e) {
+			new Notice(
+				`Beads: ${e instanceof BdError ? e.message : `Create failed: ${String(e)}`}`,
+				8000,
+			);
+			if (btn) {
+				btn.disabled = false;
+				btn.setText("Create");
 			}
 		}
 	}

@@ -5,7 +5,6 @@ import type BeadsPlugin from "./main";
 import { BeadIssue, VIEW_TYPE_BEADS } from "./types";
 import { bdReady, bdBlocked, bdByStatus, bdStatusCounts, BdError, BdOptions } from "./bd";
 import { renderIssueRow } from "./row";
-import { BeadCaptureModal } from "./capture";
 
 interface TabDef {
 	key: string;
@@ -202,7 +201,7 @@ export class BeadsView extends ItemView {
 			attr: { "aria-label": "Capture a bead" },
 		});
 		setIcon(captureBtn, "plus");
-		captureBtn.onclick = () => new BeadCaptureModal(this.app, this.plugin).open();
+		captureBtn.onclick = () => void this.plugin.newBead();
 		const refreshBtn = actions.createEl("button", {
 			cls: "clickable-icon",
 			attr: { "aria-label": "Refresh" },

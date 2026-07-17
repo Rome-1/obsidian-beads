@@ -301,10 +301,12 @@ export interface BdCreateFields {
 	type: string;
 	priority: number;
 	description?: string;
+	assignee?: string;
+	labels?: string[];
 }
 
 /**
- * `bd create --title=<t> -t <type> -p <n> [--description=<d>] --json` → new id.
+ * `bd create --title=<t> -t <type> -p <n> [...] --json` → new id.
  * Free-text fields use the `--flag=value` form so a value starting with `-`
  * is taken verbatim and never parsed as a flag.
  */
@@ -319,6 +321,8 @@ export async function bdCreate(
 		`--priority=${f.priority}`,
 	];
 	if (f.description) args.push(`--description=${f.description}`);
+	if (f.assignee) args.push(`--assignee=${f.assignee}`);
+	if (f.labels && f.labels.length) args.push(`--labels=${f.labels.join(",")}`);
 	args.push("--json");
 	const { stdout } = await run(args, opts);
 	invalidateReadCache();
