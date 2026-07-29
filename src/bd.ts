@@ -386,7 +386,7 @@ export async function bdComments(
 	const trimmed = stdout.trim();
 	if (!trimmed) return [];
 	try {
-		const parsed = JSON.parse(trimmed);
+		const parsed: unknown = JSON.parse(trimmed);
 		return Array.isArray(parsed) ? (parsed as BdComment[]) : [];
 	} catch (e) {
 		throw new BdError(`Could not parse bd comments JSON: ${String(e)}`);

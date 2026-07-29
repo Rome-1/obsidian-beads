@@ -3,6 +3,7 @@ import {
 	WorkspaceLeaf,
 	Notice,
 	MarkdownRenderer,
+	ViewStateResult,
 } from "obsidian";
 import { existsSync } from "fs";
 import { join } from "path";
@@ -87,11 +88,10 @@ export class BeadEditorView extends ItemView {
 		};
 	}
 
-	async setState(state: EditorState, result: unknown): Promise<void> {
+	async setState(state: EditorState, result: ViewStateResult): Promise<void> {
 		if (state && typeof state.id === "string") this.id = state.id;
 		if (state && state.create) this.creating = true;
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		await super.setState(state, result as any);
+		await super.setState(state, result);
 		await this.reload();
 	}
 
@@ -353,7 +353,7 @@ export class BeadEditorView extends ItemView {
 				this.model.labels.push(v);
 				this.renderLabels(cell);
 				this.syncDirty();
-				(cell.querySelector(".beads-label-add") as HTMLInputElement | null)?.focus();
+				cell.querySelector<HTMLInputElement>(".beads-label-add")?.focus();
 			}
 		});
 	}

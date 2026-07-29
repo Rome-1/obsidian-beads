@@ -41,20 +41,20 @@ export default class BeadsPlugin extends Plugin {
 		});
 
 		this.addCommand({
-			id: "open-beads-pane",
-			name: "Open Beads pane",
+			id: "open-pane",
+			name: "Open pane",
 			callback: () => void this.activateView(),
 		});
 
 		this.addCommand({
-			id: "capture-bead",
+			id: "new-bead",
 			name: "New bead",
 			callback: () => void this.newBead(),
 		});
 
 		this.addCommand({
-			id: "refresh-beads",
-			name: "Refresh Beads pane",
+			id: "refresh",
+			name: "Refresh pane",
 			callback: () => this.refreshViews(),
 		});
 
@@ -75,11 +75,8 @@ export default class BeadsPlugin extends Plugin {
 	}
 
 	async loadSettings(): Promise<void> {
-		this.settings = Object.assign(
-			{},
-			DEFAULT_SETTINGS,
-			await this.loadData(),
-		);
+		const data = (await this.loadData()) as Partial<BeadsSettings> | null;
+		this.settings = { ...DEFAULT_SETTINGS, ...(data ?? {}) };
 	}
 
 	async saveSettings(): Promise<void> {
@@ -102,7 +99,7 @@ export default class BeadsPlugin extends Plugin {
 				active: true,
 			});
 		}
-		if (leaf) workspace.revealLeaf(leaf);
+		if (leaf) await workspace.revealLeaf(leaf);
 	}
 
 	/**
@@ -115,7 +112,7 @@ export default class BeadsPlugin extends Plugin {
 		for (const leaf of workspace.getLeavesOfType(VIEW_TYPE_BEADS_EDITOR)) {
 			const state = leaf.getViewState().state as { id?: string } | undefined;
 			if (state?.id === id) {
-				workspace.revealLeaf(leaf);
+				await workspace.revealLeaf(leaf);
 				return;
 			}
 		}
@@ -125,7 +122,7 @@ export default class BeadsPlugin extends Plugin {
 			active: true,
 			state: { id },
 		});
-		workspace.revealLeaf(leaf);
+		await workspace.revealLeaf(leaf);
 	}
 
 	/** Open a blank editor tab to create a new bead (same surface as editing). */
@@ -137,7 +134,7 @@ export default class BeadsPlugin extends Plugin {
 			active: true,
 			state: { create: true },
 		});
-		workspace.revealLeaf(leaf);
+		await workspace.revealLeaf(leaf);
 	}
 
 	/** Refresh every open Beads pane, and the status-bar ready count. */

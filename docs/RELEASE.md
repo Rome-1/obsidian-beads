@@ -45,7 +45,7 @@ an incremented version**, and the directory re-scans automatically.
 
 ---
 
-## Manifest compliance (verified for 0.0.5)
+## Manifest compliance (verified for 0.0.6)
 
 | Field | Value | Rule | OK |
 | --- | --- | --- | --- |
@@ -54,8 +54,8 @@ an incremented version**, and the directory re-scans automatically.
 | `description` | *(one sentence)* | no "Obsidian"/"plugin", < 250 chars | ✅ |
 | `author` | `Rome Thorstenson` | present | ✅ |
 | `authorUrl` | `https://github.com/Rome-1` | profile URL (not the repo, not obsidian.md) | ✅ |
-| `version` | `0.0.5` | semver, no `v` prefix, matches release tag | ✅ |
-| `minAppVersion` | `1.5.0` | valid, present in `versions.json` | ✅ |
+| `version` | `0.0.6` | semver, no `v` prefix, matches release tag | ✅ |
+| `minAppVersion` | `1.7.2` | valid, present in `versions.json` | ✅ |
 | `isDesktopOnly` | `true` | required (uses `child_process`) | ✅ |
 
 `fundingUrl` is optional and intentionally omitted.
