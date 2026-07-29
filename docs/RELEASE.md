@@ -1,96 +1,60 @@
 # Release & submission checklist
 
-How to cut a release and submit **Beads** to the Obsidian community-plugin registry.
-Everything below is **Rome's** to run — it needs a public repo, a GitHub release, and
-(for the smoke-test) a desktop Obsidian. Agents prepare; Rome ships.
+How to cut a release and submit **Beads** to the Obsidian community-plugin
+directory. As of 2026 Obsidian submits plugins through a **developer dashboard**
+(`https://community.obsidian.md`), not a pull request — the old
+`obsidianmd/obsidian-releases` PR flow is disabled.
 
 ---
 
-## 0. Pre-flight (agent-preparable — already done for 0.0.4)
+## 1. Cut a GitHub release
 
-- [x] `manifest.json` present at repo root and compliant (see **Manifest compliance** below).
-- [x] `versions.json` maps the plugin version → `minAppVersion` (`{"0.0.4": "1.5.0"}`).
-- [x] `README.md` (features, install, usage, security) and `LICENSE` (MIT) present.
-- [x] `npm run build` produces `main.js` with no typecheck errors.
-- [ ] **Demo GIF** recorded and committed at `assets/demo.gif` (see `assets/README.md`).
-- [ ] **Manual smoke-test in real Obsidian** (bead `obp-j9l`) — Rome's gate; do this
-      before flipping public.
-
-## 1. Manual smoke-test (Rome — needs desktop Obsidian)
-
-1. `npm install && npm run build` in the repo.
-2. Copy `main.js`, `manifest.json`, `styles.css` into
-   `<a-test-vault>/.obsidian/plugins/beads-pane/`.
-3. Enable **Beads** under Community plugins (Settings → Community plugins).
-4. Set **Project root** to a repo containing `.beads/`; click **Test connection**.
-5. Verify: pane renders `bd list`; a checkbox closes an issue (confirm with
-   `bd show <id>`); the detail modal opens; edits made by `bd` on the CLI show up on
-   refresh.
-
-## 2. Flip the repo public
-
-- GitHub → Settings → General → Danger Zone → **Change visibility → Public**.
-- Confirm `.beads/`, `mail/`, `node_modules/`, and `main.js` are gitignored (they are)
-  so nothing internal ships. Skim `docs/BRIEF.md` — it references internal build
-  context; decide whether to keep, trim, or remove it before going public.
-
-## 3. Cut a GitHub release
-
-The version tag **must exactly match** `manifest.json`'s `version` — **no `v` prefix**.
+The release tag **must exactly match** `manifest.json`'s `version` — **no `v`
+prefix**. Prerequisites (all present): public repo, `README.md`, `LICENSE`,
+`manifest.json`, and a clean `npm run build`.
 
 ```bash
 npm run build          # produces a fresh production main.js
-git tag 0.0.4
-git push origin 0.0.4
+gh release create 0.0.5 main.js manifest.json styles.css \
+  --title "0.0.5" --notes "…"
 ```
 
-Then create the GitHub release for tag `0.0.4` and **attach these as individual binary
-files** (not zipped, not in a subfolder):
+Attach `main.js`, `manifest.json`, and `styles.css` as **individual** binary
+assets (not zipped, not in a subfolder). `versions.json` maps each released
+version → its `minAppVersion`.
 
-- `main.js`
-- `manifest.json`
-- `styles.css`
+> Bumping later: edit the version in `manifest.json` + `package.json`, add the
+> mapping to `versions.json`, commit, then `gh release create <version> …`.
 
-> To bump versions later: `npm version patch|minor|major` runs `version-bump.mjs`,
-> which syncs `manifest.json` and appends to `versions.json`. Commit, tag, release.
+## 2. Submit via the developer dashboard *(Rome — needs an Obsidian account)*
 
-## 4. Submit to `obsidianmd/obsidian-releases`
+1. Go to **https://community.obsidian.md** and sign in with your Obsidian account.
+2. **Link your GitHub account** to your profile (ownership verification).
+3. **Plugins → New plugin**.
+4. Enter the repo URL: `https://github.com/Rome-1/obsidian-beads`.
+5. Review the developer policies, confirm ongoing support, and **Submit**.
 
-1. Fork [`obsidianmd/obsidian-releases`](https://github.com/obsidianmd/obsidian-releases).
-2. Append this entry to the **end** of the array in `community-plugins.json`:
+Automated review runs immediately (results in minutes). If it passes, the plugin
+is searchable/installable in the app within ~24h. Each new release is re-scanned;
+a version that fails review is pulled from search within 24h.
 
-   ```json
-   {
-     "id": "beads-pane",
-     "name": "Beads",
-     "author": "Rome Thorstenson",
-     "description": "A live, clickable pane for the Beads (bd) issue tracker. Shells out to the bd CLI and lets you close issues from a checkbox. Desktop only.",
-     "repo": "Rome-1/obsidian-beads"
-   }
-   ```
+## 3. Address feedback
 
-3. Open a PR and complete the PR-template checklist (you have read the developer
-   policies; the plugin has a release; etc.).
-4. An automated validation bot runs, then a human review follows. Address any bot
-   comments (common ones: release-asset naming, tag/version mismatch, `id` collisions).
-
-> **Do not** self-publish or work around the review — the endgame is acceptance into
-> the official registry.
+The dashboard reports any issues. Fix them in the repo, cut a **new release with
+an incremented version**, and the directory re-scans automatically.
 
 ---
 
-## Manifest compliance (verified for 0.0.4)
-
-Checked against the obsidian-releases plugin requirements:
+## Manifest compliance (verified for 0.0.5)
 
 | Field | Value | Rule | OK |
 | --- | --- | --- | --- |
 | `id` | `beads-pane` | lowercase-hyphen, unique, no "obsidian", no "plugin", not `-plugin` suffix | ✅ |
 | `name` | `Beads` | no "Obsidian"/"plugin", unique | ✅ |
-| `description` | *(one sentence)* | no "Obsidian"/"plugin", < 250 chars, not "A plugin that…" | ✅ |
-| `author` | `Rome-1` | present | ✅ |
+| `description` | *(one sentence)* | no "Obsidian"/"plugin", < 250 chars | ✅ |
+| `author` | `Rome Thorstenson` | present | ✅ |
 | `authorUrl` | `https://github.com/Rome-1` | profile URL (not the repo, not obsidian.md) | ✅ |
-| `version` | `0.0.4` | semver, no `v` prefix | ✅ |
+| `version` | `0.0.5` | semver, no `v` prefix, matches release tag | ✅ |
 | `minAppVersion` | `1.5.0` | valid, present in `versions.json` | ✅ |
 | `isDesktopOnly` | `true` | required (uses `child_process`) | ✅ |
 
