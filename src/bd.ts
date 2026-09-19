@@ -527,28 +527,10 @@ export async function bdVersion(opts: BdOptions): Promise<string> {
 }
 
 /**
- * The `summary` block of `bd status --json` — per-status counts in one cheap
- * call (keys like `ready_issues`, `blocked_issues`, `closed_issues`, ...).
+ * Ready-issue count (for the status bar): the length of `bd ready --limit 0`,
+ * so it matches the Ready tab. Not `bd status`'s ready_issues, which
+ * undercounts (see `tabCounts` in filter.ts).
  */
-export async function bdStatusCounts(
-	opts: BdOptions,
-): Promise<Record<string, number>> {
-	const { stdout } = await run(["status", "--json"], opts);
-	return parseStatusCounts(stdout);
-}
-
-/** `bd status --json` → its `summary` counts; {} if absent or unparseable (counts are optional chrome). */
-export function parseStatusCounts(stdout: string): Record<string, number> {
-	try {
-		const d = parseJson(stdout, "status") as { summary?: Record<string, number> } | null;
-		return d?.summary ?? {};
-	} catch {
-		return {};
-	}
-}
-
-/** Ready-issue count (for the status bar). */
 export async function bdReadyCount(opts: BdOptions): Promise<number> {
-	const counts = await bdStatusCounts(opts);
-	return counts.ready_issues ?? 0;
+	return (await bdReady(opts, 0)).length;
 }

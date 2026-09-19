@@ -8,7 +8,6 @@ import {
 	bdBlocked,
 	bdByStatus,
 	bdCount,
-	bdStatusCounts,
 	bdLabelNames,
 	bdAssigneeNames,
 	bdTypeNames,
@@ -29,6 +28,7 @@ import {
 	matchesFilter,
 	parseFilter,
 	rememberAssignee,
+	tabCounts,
 } from "./filter";
 
 interface TabDef {
@@ -75,13 +75,14 @@ function byPriority(issues: BeadIssue[]): BeadIssue[] {
 }
 
 /**
- * Tabbed, lazily-loaded pane. Only the active tab hits `bd` (plus one cheap
- * `bd status` for the tab counts), and each tab paginates with "Load more" —
- * so opening the pane is fast even with thousands of closed issues.
+ * Tabbed, lazily-loaded pane. Only the active tab's list is loaded, and each
+ * tab paginates with "Load more" — so opening the pane is fast even with
+ * thousands of closed issues. Tab counts come from the same bd commands as the
+ * lists (`tabCounts` — not `bd status`, whose ready count is wrong).
  *
- * Filters (assignee / labels / type) are passed to bd as flags; tab counts
- * switch from one `bd status` to filtered counts while a filter is active. The
- * filter is kept in the view state, so it survives reloads.
+ * Filters (assignee / labels / type) are passed to bd as flags, for the lists
+ * and the counts alike. The filter is kept in the view state, so it survives
+ * reloads.
  */
 export class BeadsView extends ItemView {
 	private active = "ready";
@@ -169,35 +170,16 @@ export class BeadsView extends ItemView {
 		}
 		const seq = ++this.loadSeq;
 		try {
-			this.counts = isFilterActive(this.filter)
-				? await this.filteredCounts(opts)
-				: await bdStatusCounts(opts);
+			this.counts = await tabCounts(this.filter, {
+				ready: (args) => bdReady(opts, 0, args),
+				count: (status, args) => bdCount(opts, status, args),
+				blocked: () => bdBlocked(opts),
+			});
 		} catch {
 			this.counts = {}; /* counts are optional chrome */
 		}
 		if (seq !== this.loadSeq) return;
 		await this.loadTab(this.active, seq);
-	}
-
-	/**
-	 * Tab counts under a filter. bd counts what it can (`bd count` per stored
-	 * status, `bd ready --limit 0`); Blocked is counted from the locally
-	 * filtered `bd blocked` output, since that command has no filter flags.
-	 */
-	private async filteredCounts(opts: BdOptions): Promise<Record<string, number>> {
-		const f = this.filter;
-		const [ready, inProgress, closed, blocked] = await Promise.all([
-			bdReady(opts, 0, filterArgs(f, "ready")),
-			bdCount(opts, "in_progress", filterArgs(f, "count")),
-			bdCount(opts, "closed", filterArgs(f, "count")),
-			bdBlocked(opts),
-		]);
-		return {
-			ready_issues: ready.length,
-			in_progress_issues: inProgress,
-			closed_issues: closed,
-			blocked_issues: blocked.filter((i) => matchesFilter(i, f)).length,
-		};
 	}
 
 	private fetchTab(
@@ -225,6 +207,9 @@ export class BeadsView extends ItemView {
 
 	private setFilter(next: PaneFilter): void {
 		this.filter = next;
+		// Redraw the bar now (chips, summary) — not after the refresh's bd calls —
+		// so a quick second change builds on this one.
+		this.render();
 		void this.refresh();
 		// Persist in the workspace so the filter survives reloads.
 		this.app.workspace.requestSaveLayout();
@@ -242,7 +227,7 @@ export class BeadsView extends ItemView {
 		if (!opts || this.optionsLoading) return;
 		this.optionsLoading = true;
 		this.optionsError = null;
-		this.render();
+		this.fillFilterChoices();
 		try {
 			const [assignees, labels, types] = await Promise.all([
 				bdAssigneeNames(opts),
@@ -254,7 +239,9 @@ export class BeadsView extends ItemView {
 			this.optionsError = e instanceof BdError ? e.message : String(e);
 		} finally {
 			this.optionsLoading = false;
-			this.render();
+			// Refill the dropdowns in place — never rebuild the bar here, or
+			// text being typed in the assignee box would be wiped.
+			this.fillFilterChoices();
 		}
 	}
 
@@ -323,6 +310,12 @@ export class BeadsView extends ItemView {
 	/** What the filter bar was last built from — it's rebuilt only when this changes. */
 	private filterBarKey = "";
 	private assigneeSuggest: AssigneeSuggest | null = null;
+	/** Filter-bar parts that depend on bd's choices (refilled in place). */
+	private filterUi: {
+		error: HTMLElement;
+		type: HTMLSelectElement;
+		addLabel: HTMLSelectElement;
+	} | null = null;
 
 	/**
 	 * Update the pane. Only the bead list is rebuilt; the header, filter bar,
@@ -352,15 +345,9 @@ export class BeadsView extends ItemView {
 		shell.tabBar.toggle(ok);
 		shell.body.toggle(ok);
 
-		// Filter bar: rebuilt only when the filter or its choices change.
-		const barKey = JSON.stringify([
-			ok,
-			this.filter,
-			this.showFilters,
-			this.options !== null,
-			this.optionsLoading,
-			this.optionsError,
-		]);
+		// Filter bar: rebuilt only when the filter itself (or its visibility)
+		// changes. Choices arriving from bd refill the dropdowns in place.
+		const barKey = JSON.stringify([ok, this.filter, this.showFilters]);
 		if (barKey !== this.filterBarKey) {
 			this.filterBarKey = barKey;
 			this.renderFilterBar(shell.filters, ok);
@@ -475,6 +462,7 @@ export class BeadsView extends ItemView {
 		const f = this.filter;
 		this.assigneeSuggest?.close();
 		this.assigneeSuggest = null;
+		this.filterUi = null;
 		bar.empty();
 		const visible = ok && (this.showFilters || isFilterActive(f));
 		bar.toggle(visible);
@@ -492,27 +480,15 @@ export class BeadsView extends ItemView {
 		if (!this.options && !this.optionsLoading && !this.optionsError) {
 			window.setTimeout(() => void this.loadOptions(), 0);
 		}
-		if (this.optionsError) {
-			bar.createDiv({
-				cls: "beads-empty beads-error",
-				text: `Couldn't load filter choices: ${this.optionsError} — press refresh to retry.`,
-			});
-		}
-		const o = this.options ?? { assignees: [], labels: [], types: [] };
-		// Still fetching (or about to) — but not after a failed load, which shows
-		// its error above and retries on Refresh.
-		const loading = this.optionsLoading || (!this.options && !this.optionsError);
+		const error = bar.createDiv({ cls: "beads-empty beads-error" });
 
 		const row = bar.createDiv({ cls: "beads-filter-row" });
-		this.assigneeBox(row, o.assignees);
+		this.assigneeBox(row);
 
-		const type = this.filterSelect(
-			row,
-			"Type",
-			[{ value: "", label: "Any type" }, ...o.types.map((t) => ({ value: t, label: t }))],
-			f.type,
-		);
-		type.onchange = () => this.setFilter({ ...f, type: type.value });
+		// Handlers read `this.filter` when they fire, never a copy captured at
+		// build time — two quick changes must both stick.
+		const type = this.filterSelect(row, "Type");
+		type.onchange = () => this.setFilter({ ...this.filter, type: type.value });
 
 		const labelRow = bar.createDiv({ cls: "beads-filter-row beads-labels" });
 		for (const l of f.labels) {
@@ -520,11 +496,45 @@ export class BeadsView extends ItemView {
 			chip.createSpan({ text: l });
 			const x = chip.createSpan({ cls: "beads-label-x", text: "×" });
 			x.setAttr("aria-label", `Remove label filter ${l}`);
-			x.onclick = () => this.setFilter({ ...f, labels: f.labels.filter((k) => k !== l) });
+			x.onclick = () =>
+				this.setFilter({ ...this.filter, labels: this.filter.labels.filter((k) => k !== l) });
 		}
-		const addLabel = this.filterSelect(
-			labelRow,
-			"Add label filter",
+		const addLabel = this.filterSelect(labelRow, "Add label filter");
+		addLabel.onchange = () => {
+			const v = addLabel.value;
+			if (v && !this.filter.labels.includes(v)) {
+				this.setFilter({ ...this.filter, labels: [...this.filter.labels, v] });
+			}
+		};
+		if (isFilterActive(f)) this.clearButton(labelRow);
+
+		this.filterUi = { error, type, addLabel };
+		this.fillFilterChoices();
+	}
+
+	/** (Re)fill the bd-sourced parts of the filter bar in place. */
+	private fillFilterChoices(): void {
+		const ui = this.filterUi;
+		if (!ui) return;
+		const f = this.filter;
+		const o = this.options ?? { assignees: [], labels: [], types: [] };
+		// Still fetching (or about to) — but not after a failed load, which shows
+		// its error and retries on Refresh.
+		const loading = this.optionsLoading || (!this.options && !this.optionsError);
+
+		ui.error.setText(
+			this.optionsError
+				? `Couldn't load filter choices: ${this.optionsError} — press refresh to retry.`
+				: "",
+		);
+		ui.error.toggle(Boolean(this.optionsError));
+		setOptions(
+			ui.type,
+			[{ value: "", label: "Any type" }, ...o.types.map((t) => ({ value: t, label: t }))],
+			f.type,
+		);
+		setOptions(
+			ui.addLabel,
 			[
 				{
 					value: "",
@@ -534,10 +544,6 @@ export class BeadsView extends ItemView {
 			],
 			"",
 		);
-		addLabel.onchange = () => {
-			if (addLabel.value) this.setFilter({ ...f, labels: [...f.labels, addLabel.value] });
-		};
-		if (isFilterActive(f)) this.clearButton(labelRow);
 	}
 
 	/**
@@ -545,7 +551,7 @@ export class BeadsView extends ItemView {
 	 * remembers the name); an empty box means anyone. Leaving the box without
 	 * Enter restores the applied value, so a half-typed name never filters.
 	 */
-	private assigneeBox(parent: HTMLElement, known: string[]): void {
+	private assigneeBox(parent: HTMLElement): void {
 		const wrap = parent.createDiv({ cls: "beads-filter-inputwrap" });
 		const input = wrap.createEl("input", {
 			cls: "beads-filter-select beads-filter-input",
@@ -576,7 +582,7 @@ export class BeadsView extends ItemView {
 		};
 		this.assigneeSuggest = new AssigneeSuggest(this.app, input, {
 			saved: () => this.plugin.settings.savedAssignees,
-			known: () => known,
+			known: () => this.options?.assignees ?? [], // read live: choices may load later
 			hidden: () => this.plugin.settings.hiddenAssignees,
 			forget: (name) => this.forgetAssigneeName(name),
 			hide: (name) => this.hideAssigneeName(name),
@@ -624,27 +630,29 @@ export class BeadsView extends ItemView {
 		void this.plugin.saveSettings();
 	}
 
-	private filterSelect(
-		parent: HTMLElement,
-		label: string,
-		options: { value: string; label: string }[],
-		current: string,
-	): HTMLSelectElement {
-		const sel = parent.createEl("select", {
+	private filterSelect(parent: HTMLElement, label: string): HTMLSelectElement {
+		return parent.createEl("select", {
 			cls: "dropdown beads-filter-select",
 			attr: { "aria-label": label },
 		});
-		// Keep a saved value selectable even before (or without) bd listing it.
-		if (current && !options.some((o) => o.value === current)) {
-			options = [...options, { value: current, label: current }];
-		}
-		for (const o of options) sel.createEl("option", { value: o.value, text: o.label });
-		sel.value = current;
-		return sel;
 	}
 
 	private clearButton(parent: HTMLElement): void {
 		const btn = parent.createEl("button", { cls: "beads-filter-clear", text: "Clear" });
 		btn.onclick = () => this.setFilter({ ...EMPTY_FILTER, labels: [] });
 	}
+}
+
+/** Replace a select's options, keeping `current` selectable even if bd doesn't list it. */
+function setOptions(
+	sel: HTMLSelectElement,
+	options: { value: string; label: string }[],
+	current: string,
+): void {
+	if (current && !options.some((o) => o.value === current)) {
+		options = [...options, { value: current, label: current }];
+	}
+	sel.empty();
+	for (const o of options) sel.createEl("option", { value: o.value, text: o.label });
+	sel.value = current;
 }

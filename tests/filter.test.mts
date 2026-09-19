@@ -13,6 +13,7 @@ import {
 	parseSavedAssignees,
 	rememberAssignee,
 	suggestAssignees,
+	tabCounts,
 	isFilterActive,
 	matchesFilter,
 	parseFilter,
@@ -149,10 +150,11 @@ test("forgetAssignee removes exactly that name", () => {
 });
 
 const names = (xs: ReturnType<typeof suggestAssignees>) =>
-	xs.map((s) => (s.kind === "unassigned" ? "<unassigned>" : `${s.kind}:${s.name}`));
+	xs.map((s) => (s.kind === "unassigned" ? "<unassigned>" : s.kind === "anyone" ? "<anyone>" : `${s.kind}:${s.name}`));
 
-test("suggestAssignees with an empty box: Unassigned, then saved, then known (minus saved)", () => {
+test("suggestAssignees with an empty box: Anyone first (Enter clears), then Unassigned, saved, known", () => {
 	assert.deepEqual(names(suggestAssignees("", ["igor", "bob"], ["harness-w1", "bob", "(unassigned)"])), [
+		"<anyone>",
 		"<unassigned>",
 		"saved:igor",
 		"saved:bob",
@@ -171,6 +173,7 @@ test("suggestAssignees offers the typed text first so Enter keeps it, then case-
 
 test("suggestAssignees doesn't duplicate the typed text when it's an exact match", () => {
 	assert.deepEqual(names(suggestAssignees("igor", ["igor"], ["igor-2"])), ["saved:igor", "known:igor-2"]);
+	assert.deepEqual(names(suggestAssignees("  ", [], [])), ["<anyone>", "<unassigned>"]);
 	assert.deepEqual(names(suggestAssignees("bob", [], ["bob"])), ["known:bob"]);
 	assert.deepEqual(names(suggestAssignees(NO_ASSIGNEE, [], [])), ["<unassigned>"]);
 });
@@ -237,9 +240,57 @@ test("suggestAssignees leaves out hidden bd names, but never saved or typed ones
 		30,
 		["harness-*"],
 	);
-	assert.deepEqual(names(out), ["<unassigned>", "saved:harness-w9", "known:alice"]);
+	assert.deepEqual(names(out), ["<anyone>", "<unassigned>", "saved:harness-w9", "known:alice"]);
 	// Typing a hidden name still offers it (typed), so it can be filtered on.
 	assert.deepEqual(names(suggestAssignees("harness-w1", [], ["harness-w1"], 30, ["harness-*"])), [
 		"typed:harness-w1",
 	]);
+});
+
+// --- tab counts ------------------------------------------------------------------
+
+test("tabCounts: counts come from the same sources as the lists, with the filter applied", async () => {
+	const calls: string[] = [];
+	const blockedList = [
+		issue({ id: "b1", labels: ["x"] }),
+		issue({ id: "b2", labels: ["y"] }),
+		issue({ id: "b3", labels: ["x"], issue_type: "bug" }),
+	];
+	const src = {
+		ready: async (args: string[]) => {
+			calls.push(`ready ${args.join(" ")}`);
+			return [issue({ id: "r1" }), issue({ id: "r2" })];
+		},
+		count: async (status: string, args: string[]) => {
+			calls.push(`count ${status} ${args.join(" ")}`);
+			return status === "closed" ? 7 : 3;
+		},
+		blocked: async () => {
+			calls.push("blocked");
+			return blockedList;
+		},
+	};
+	assert.deepEqual(await tabCounts(f(), src), {
+		ready_issues: 2,
+		in_progress_issues: 3,
+		closed_issues: 7,
+		blocked_issues: 3,
+	});
+	calls.length = 0;
+	const counts = await tabCounts(f({ labels: ["x"], assignee: NO_ASSIGNEE }), src);
+	assert.equal(counts.blocked_issues, 2, "blocked filtered locally");
+	assert.deepEqual(calls.sort(), [
+		"blocked",
+		"count closed --no-assignee --label=x",
+		"count in_progress --no-assignee --label=x",
+		"ready --unassigned --label=x",
+	]);
+});
+
+test("suggestAssignees moves an exact match to the front so Enter can't pick a longer name (review)", () => {
+	// Saved most-recent-first: alice2 would be highlighted without the move.
+	assert.deepEqual(names(suggestAssignees("alice", ["alice2", "alice"], [])), ["saved:alice", "saved:alice2"]);
+	assert.deepEqual(names(suggestAssignees("bob", [], ["bobby", "bob"])), ["known:bob", "known:bobby"]);
+	// "(unassigned)" typed exactly: Unassigned first.
+	assert.deepEqual(names(suggestAssignees(NO_ASSIGNEE, ["x(unassigned)"], [])), ["<unassigned>", "saved:x(unassigned)"]);
 });

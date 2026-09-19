@@ -23,13 +23,20 @@ import {
 	bdLabelNames,
 	bdReady,
 	bdShow,
-	bdStatusCounts,
+	bdReadyCount,
 	bdTypeNames,
 	bdUpdate,
 	type BdOptions,
 } from "../src/bd.ts";
 import { buildLineage, DEFAULT_LINEAGE_OPTIONS } from "../src/lineage.ts";
-import { NO_ASSIGNEE, filterArgs, matchesFilter, type PaneFilter } from "../src/filter.ts";
+import {
+	EMPTY_FILTER,
+	NO_ASSIGNEE,
+	filterArgs,
+	matchesFilter,
+	tabCounts,
+	type PaneFilter,
+} from "../src/filter.ts";
 
 const BD = process.env.BD_BIN ?? "bd";
 const hasBd = (() => {
@@ -228,7 +235,7 @@ test("every bd call reads the same data with BD_JSON_ENVELOPE=1 (bd v2.0 default
 		deps: ids(await bdDepList(opts, id, "down")),
 		comments: (await bdComments(opts, id)).map((c) => c.text),
 		count: await bdCount(opts, "open"),
-		status: Object.keys(await bdStatusCounts(opts)).length > 0,
+		readyCount: (await bdReadyCount(opts)) > 0,
 		labels: (await bdLabelNames(opts)).sort(),
 		assignees: (await bdAssigneeNames(opts)).sort(),
 		types: await bdTypeNames(opts),
@@ -244,9 +251,53 @@ test("every bd call reads the same data with BD_JSON_ENVELOPE=1 (bd v2.0 default
 		assert.deepEqual({ ...enveloped, open: [], ready: [], count: 0 }, { ...legacy, open: [], ready: [], count: 0 });
 		assert.equal(enveloped.count, legacy.count + 1);
 		assert.equal(enveloped.open.length, legacy.open.length + 1);
-		assert.ok(legacy.comments.includes("hello") && legacy.status && legacy.created);
+		assert.ok(legacy.comments.includes("hello") && legacy.readyCount && legacy.created);
 	} finally {
 		if (prev === undefined) delete process.env.BD_JSON_ENVELOPE;
 		else process.env.BD_JSON_ENVELOPE = prev;
 	}
+});
+
+// --- tab counts match the tab lists (bd status undercounts ready) ------------
+
+test("tab counts equal list lengths, even with a blocked deferred bead (bd status undercounts)", { skip }, async () => {
+	await seedFilterData();
+	// The case that breaks `bd status`: a bead that is both blocked and deferred.
+	const blocker = await create("count-blocker");
+	const deferred = await create("count-deferred-blocked");
+	bd("dep", "add", deferred, blocker);
+	bd("update", deferred, "--status=deferred");
+
+	const statusReady = (JSON.parse(bd("status", "--json")) as { summary: { ready_issues: number } }).summary
+		.ready_issues;
+	const readyList = await bdReady(opts, 0);
+	// Pin the bd behaviour this change works around (update if bd fixes it).
+	assert.ok(statusReady < readyList.length, `bd status ready=${statusReady}, bd ready lists ${readyList.length}`);
+
+	const src = {
+		ready: (args: string[]) => bdReady(opts, 0, args),
+		count: (status: string, args: string[]) => bdCount(opts, status, args),
+		blocked: () => bdBlocked(opts),
+	};
+	for (const f of [{ ...EMPTY_FILTER, labels: [] }, ...FILTERS]) {
+		const counts = await tabCounts(f, src);
+		assert.equal(counts.ready_issues, (await bdReady(opts, 0, filterArgs(f, "ready"))).length, `ready ${label(f)}`);
+		assert.equal(
+			counts.in_progress_issues,
+			(await bdByStatus(opts, "in_progress", 0, filterArgs(f, "list"))).length,
+			`in_progress ${label(f)}`,
+		);
+		assert.equal(
+			counts.closed_issues,
+			(await bdByStatus(opts, "closed", 0, filterArgs(f, "list"))).length,
+			`closed ${label(f)}`,
+		);
+		assert.equal(
+			counts.blocked_issues,
+			(await bdBlocked(opts)).filter((i) => matchesFilter(i, f)).length,
+			`blocked ${label(f)}`,
+		);
+	}
+	// The status bar agrees with the Ready tab.
+	assert.equal(await bdReadyCount(opts), readyList.length);
 });

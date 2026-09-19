@@ -6,7 +6,6 @@ import {
 	parseComments,
 	parseCount,
 	parseIssues,
-	parseStatusCounts,
 	unwrapEnvelope,
 	parseLabelNames,
 	parseTypeNames,
@@ -136,7 +135,6 @@ test("every parser reads the enveloped (bd 2.x) format the same as the legacy on
 	assert.deepEqual(parseIssues(env(issues)), parseIssues(JSON.stringify(issues)));
 	assert.deepEqual(parseIssues(env(issues[0])), issues); // bd show / create single object
 	assert.equal(parseCount(env({ count: 375 })), 375);
-	assert.deepEqual(parseStatusCounts(env({ summary: { ready_issues: 17 } })), { ready_issues: 17 });
 	assert.deepEqual(parseLabelNames(env([{ label: "a", count: 1 }])), ["a"]);
 	assert.deepEqual(parseAssigneeNames(env({ groups: [{ group: "bob", count: 1 }] })), ["bob"]);
 	assert.deepEqual(parseTypeNames(env({ core_types: [{ name: "task" }], custom_types: [] })), ["task"]);
@@ -150,9 +148,8 @@ test("legacy single-object output (bd create) still parses to one issue", () => 
 	]);
 });
 
-test("empty output parses to nothing; status counts tolerate junk", () => {
+test("empty output parses to nothing", () => {
 	assert.deepEqual(parseIssues("  "), []);
 	assert.deepEqual(parseComments(""), []);
 	assert.equal(parseCount(""), 0);
-	assert.deepEqual(parseStatusCounts("not json"), {});
 });

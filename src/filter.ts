@@ -82,6 +82,8 @@ export function describeFilter(f: PaneFilter): string {
 export const MAX_SAVED_ASSIGNEES = 50;
 
 export type AssigneeSuggestion =
+	/** Empty box: "Anyone" (no assignee filter) — first, so Enter on an empty box clears the filter. */
+	| { kind: "anyone" }
 	/** Exactly what was typed, when it isn't already an exact suggestion — first, so Enter keeps it. */
 	| { kind: "typed"; name: string }
 	| { kind: "unassigned" }
@@ -107,10 +109,13 @@ export function forgetAssignee(saved: readonly string[], name: string): string[]
 
 /**
  * What the assignee box suggests for `query` (case-insensitive substring):
- * the typed text itself (unless it exactly matches a suggestion), then
  * "Unassigned", then remembered names, then bd's other assignees (capped at
  * `knownLimit` — a busy harness can have dozens). bd names matching a `hidden`
  * pattern are left out; saved names never are (the user chose them).
+ *
+ * The first entry is what Enter picks (the popup highlights it), so it's
+ * always what the box literally says: "Anyone" for an empty box, the exact
+ * match if the text names one, otherwise the typed text itself.
  */
 export function suggestAssignees(
 	query: string,
@@ -138,11 +143,13 @@ export function suggestAssignees(
 			.map((name) => ({ kind: "known" as const, name })),
 	);
 	const typed = query.trim();
-	const exact = out.some((s) =>
-		s.kind === "unassigned" ? typed === NO_ASSIGNEE : s.kind !== "typed" && s.name === typed,
+	if (!typed) return [{ kind: "anyone" }, ...out];
+	const exact = out.findIndex((s) =>
+		s.kind === "unassigned" ? typed === NO_ASSIGNEE : "name" in s && s.name === typed,
 	);
-	if (typed && !exact) out.unshift({ kind: "typed", name: typed });
-	return out;
+	if (exact < 0) return [{ kind: "typed", name: typed }, ...out];
+	// Move the exact match to the front so Enter picks it, not a longer name.
+	return [out[exact], ...out.slice(0, exact), ...out.slice(exact + 1)];
 }
 
 /** Keep only well-formed names from saved settings. */
@@ -185,4 +192,38 @@ export function parsePatterns(raw: unknown): string[] {
 			? raw.split("\n")
 			: [];
 	return [...new Set(lines.map((s) => s.trim()).filter(Boolean))];
+}
+
+// --- tab counts -----------------------------------------------------------
+
+/** The bd calls `tabCounts` needs — injected so it stays pure and testable. */
+export interface CountSources {
+	/** `bd ready --limit 0 [flags]`. */
+	ready(args: string[]): Promise<BeadIssue[]>;
+	/** `bd count --status <status> [flags]`. */
+	count(status: string, args: string[]): Promise<number>;
+	/** `bd blocked` (it has no filter flags). */
+	blocked(): Promise<BeadIssue[]>;
+}
+
+/**
+ * The pane's tab counts, each from the same bd command as its tab's list, so a
+ * count always matches what the tab shows. NOT `bd status`: its ready_issues
+ * is `open − blocked`, where "blocked" also includes blocked *deferred* (and
+ * in-progress) beads that were never in the open count — so it undercounts
+ * (Govini: status said 1 ready while `bd ready` listed 4).
+ */
+export async function tabCounts(f: PaneFilter, src: CountSources): Promise<Record<string, number>> {
+	const [ready, inProgress, closed, blocked] = await Promise.all([
+		src.ready(filterArgs(f, "ready")),
+		src.count("in_progress", filterArgs(f, "count")),
+		src.count("closed", filterArgs(f, "count")),
+		src.blocked(),
+	]);
+	return {
+		ready_issues: ready.length,
+		in_progress_issues: inProgress,
+		closed_issues: closed,
+		blocked_issues: blocked.filter((i) => matchesFilter(i, f)).length,
+	};
 }

@@ -116,6 +116,7 @@ export class BeadEditorView extends ItemView {
 	}
 
 	onClose(): Promise<void> {
+		this.disposeTextFields();
 		this.contentEl.empty();
 		return Promise.resolve();
 	}
@@ -129,6 +130,7 @@ export class BeadEditorView extends ItemView {
 
 	private message(text: string, isError = false): void {
 		const root = this.contentEl;
+		this.disposeTextFields();
 		root.empty();
 		root.addClass("beads-editor");
 		root.createDiv({
@@ -180,8 +182,7 @@ export class BeadEditorView extends ItemView {
 		const issue = this.issue;
 		if (!creating && !issue) return;
 		const root = this.contentEl;
-		for (const f of this.textFields) f.dispose();
-		this.textFields = [];
+		this.disposeTextFields();
 		root.empty();
 		root.addClass("beads-editor");
 
@@ -338,6 +339,15 @@ export class BeadEditorView extends ItemView {
 		} else {
 			titleInput.focus();
 		}
+	}
+
+	/**
+	 * Release every text field (preview components + edit-mode document
+	 * listeners). Call before anything empties `contentEl`.
+	 */
+	private disposeTextFields(): void {
+		for (const f of this.textFields) f.dispose();
+		this.textFields = [];
 	}
 
 	private textField(

@@ -201,7 +201,7 @@ in its `docs/` folder and at https://beads.gascity.com/. Installed here: `bd
 | `bd update <id> --title/--description/--priority/--type/--status/--assignee/--add-label/--remove-label/--claim` | Edit fields (`--claim` sets you as assignee and status `in_progress`) |
 | `bd close <id> --reason "…"` | Close (refused while open blockers remain) |
 | `bd comments <id>` / `bd comments add <id> "text"` | Comment thread |
-| `bd status` | Counts: `summary.{ready_issues, blocked_issues, open_issues, in_progress_issues, closed_issues, deferred_issues, pinned_issues, total_issues}` |
+| `bd status` | Counts: `summary.{ready_issues, blocked_issues, open_issues, …}`. ⚠️ `ready_issues` undercounts (see Pane filters); the plugin doesn't use it |
 | `bd prime` / `bd remember "…"` | Agent workflow context and persistent project memory |
 
 ### JSON shapes the plugin relies on (verified with bd 1.2.2)
@@ -228,7 +228,8 @@ comments now exist), but these rules still hold:
 - **Pane filters** (`filter.ts`) are passed to bd as flags: `bd ready` / `bd list` / `bd count` take `--assignee`, repeated `--label` (AND) and `--type`
   - The unassigned flag is `--unassigned` for `ready` but `--no-assignee` for `list` / `count`
   - **Only exception**: `bd blocked` has no filter flags, so the Blocked tab filters its output with `matchesFilter`. An integration test checks that rule gives the same results as bd's own flags
-  - Filtered tab counts use `bd count` / `bd ready --limit 0` instead of `bd status`
+  - **Tab counts always come from the same command as the tab's list** (`tabCounts` in `filter.ts`): `bd ready --limit 0`, `bd count --status`, and the length of `bd blocked`. The status bar's ready count does the same
+  - Never use `bd status` for counts: its `ready_issues` is `open − blocked`, and "blocked" also includes blocked *deferred* and *in_progress* beads, so it undercounts (Govini showed 1 ready while `bd ready` listed 4). The integration suite reproduces this
   - Dropdown choices load on demand, never on the auto-refresh timer
   - Saved assignee names (`settings.savedAssignees`, at most 50, most recent first) and hidden patterns (`settings.hiddenAssignees`, exact names or `*` globs) are the one exception to the "no local state" rule. They're lists the user curates, stored in the plugin settings, and bd stays the source of truth for assignees
   - Hidden patterns only affect the suggestions. They never stop a typed name from filtering

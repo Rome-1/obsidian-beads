@@ -24,8 +24,8 @@ who tracks work in `bd` and lives in Obsidian.
 - 🔎 **Filter the pane** — the funnel icon opens an **assignee / type / labels** filter
   bar (labels are AND: a bead must carry every chosen label). Filters apply to every
   tab and its count, and are remembered with the workspace. **Assignee** is a text box:
-  type any name and press Enter (or pick a suggestion); the **×** inside the box clears it
-  (back to anyone). Names you use are remembered and listed first — **×** removes one from
+  type any name and press Enter (or pick a suggestion); the **×** inside the box — or
+  Enter on an empty box ("Anyone") — clears it. An exact match is always offered first. Names you use are remembered and listed first — **×** removes one from
   your list; bd's other assignees follow (`bd count --by-assignee`) — **×** hides one.
   Hide many at once with **Settings → Hide assignees matching** (one per line, `*`
   wildcard, e.g. `harness-*`). Esc closes the suggestions, Esc again (or clicking away)

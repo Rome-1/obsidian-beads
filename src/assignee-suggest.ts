@@ -17,7 +17,8 @@ export interface AssigneeSource {
 }
 
 /**
- * Suggestion popup for the pane's assignee box: what you typed, "Unassigned",
+ * Suggestion popup for the pane's assignee box: "Anyone" / what you typed / the
+ * exact match first (that's what Enter picks), then "Unassigned",
  * the names you've used (× forgets one), then bd's other assignees (× hides
  * one — it's added to Settings → "Hide assignees matching").
  */
@@ -37,6 +38,10 @@ export class AssigneeSuggest extends AbstractInputSuggest<AssigneeSuggestion> {
 
 	renderSuggestion(s: AssigneeSuggestion, el: HTMLElement): void {
 		el.addClass("beads-assignee-suggestion");
+		if (s.kind === "anyone") {
+			el.createSpan({ cls: "beads-assignee-special", text: "Anyone (no assignee filter)" });
+			return;
+		}
 		if (s.kind === "typed") {
 			el.createSpan({ cls: "beads-assignee-special", text: `Use “${s.name}”` });
 			return;
@@ -73,7 +78,7 @@ export class AssigneeSuggest extends AbstractInputSuggest<AssigneeSuggestion> {
 	}
 
 	selectSuggestion(s: AssigneeSuggestion): void {
-		const value = s.kind === "unassigned" ? NO_ASSIGNEE : s.name;
+		const value = s.kind === "anyone" ? "" : s.kind === "unassigned" ? NO_ASSIGNEE : s.name;
 		this.setValue(value);
 		this.close();
 		this.source.pick(value);
