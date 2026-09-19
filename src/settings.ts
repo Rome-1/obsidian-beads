@@ -1,6 +1,7 @@
 import { App, PluginSettingTab, Setting, Notice } from "obsidian";
 import type BeadsPlugin from "./main";
 import { bdVersion } from "./bd";
+import { parsePatterns } from "./filter";
 
 export interface BeadsSettings {
 	/** Absolute path to the project root (the directory containing `.beads/`). */
@@ -9,12 +10,18 @@ export interface BeadsSettings {
 	bdPath: string;
 	/** Auto-refresh interval in seconds (0 = disabled). */
 	refreshIntervalSec: number;
+	/** Assignee names typed into the pane filter, most recent first (user-curated). */
+	savedAssignees: string[];
+	/** bd assignees to leave out of suggestions: exact names or `*` globs. */
+	hiddenAssignees: string[];
 }
 
 export const DEFAULT_SETTINGS: BeadsSettings = {
 	projectRoot: "",
 	bdPath: "bd",
 	refreshIntervalSec: 30,
+	savedAssignees: [],
+	hiddenAssignees: [],
 };
 
 export class BeadsSettingTab extends PluginSettingTab {
@@ -74,6 +81,22 @@ export class BeadsSettingTab extends PluginSettingTab {
 						this.plugin.restartRefreshTimer();
 					}),
 			);
+
+		new Setting(containerEl)
+			.setName("Hide assignees matching")
+			.setDesc(
+				"Assignees bd knows about that the pane's assignee box shouldn't suggest — one per line. Use * as a wildcard (e.g. harness-*). The × on a suggestion adds its name here. Typing a hidden name still filters for it.",
+			)
+			.addTextArea((text) => {
+				text
+					.setPlaceholder("harness-*")
+					.setValue(this.plugin.settings.hiddenAssignees.join("\n"))
+					.onChange(async (value) => {
+						this.plugin.settings.hiddenAssignees = parsePatterns(value);
+						await this.plugin.saveSettings();
+					});
+				text.inputEl.rows = 4;
+			});
 
 		new Setting(containerEl)
 			.setName("Test connection")

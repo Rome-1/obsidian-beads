@@ -8,9 +8,15 @@ import {
 } from "./settings";
 import { BeadsView } from "./view";
 import { BeadEditorView } from "./editor";
-import { VIEW_TYPE_BEADS, VIEW_TYPE_BEADS_EDITOR } from "./types";
+import { BeadLineageView } from "./lineage-view";
+import {
+	VIEW_TYPE_BEADS,
+	VIEW_TYPE_BEADS_EDITOR,
+	VIEW_TYPE_BEADS_LINEAGE,
+} from "./types";
 import { bdReadyCount, invalidateReadCache } from "./bd";
 import { registerBeadsCodeBlock } from "./codeblock";
+import { parsePatterns, parseSavedAssignees } from "./filter";
 
 export default class BeadsPlugin extends Plugin {
 	settings!: BeadsSettings;
@@ -36,6 +42,11 @@ export default class BeadsPlugin extends Plugin {
 			(leaf) => new BeadEditorView(leaf, this),
 		);
 
+		this.registerView(
+			VIEW_TYPE_BEADS_LINEAGE,
+			(leaf) => new BeadLineageView(leaf, this),
+		);
+
 		this.addRibbonIcon("list-checks", "Open Beads pane", () => {
 			void this.activateView();
 		});
@@ -50,6 +61,18 @@ export default class BeadsPlugin extends Plugin {
 			id: "new-bead",
 			name: "New bead",
 			callback: () => void this.newBead(),
+		});
+
+		this.addCommand({
+			id: "show-lineage",
+			name: "Show lineage of current bead",
+			checkCallback: (checking) => {
+				const view = this.app.workspace.getActiveViewOfType(BeadEditorView);
+				const id = view?.beadId;
+				if (!id) return false;
+				if (!checking) void this.openLineage(id);
+				return true;
+			},
 		});
 
 		this.addCommand({
@@ -77,6 +100,8 @@ export default class BeadsPlugin extends Plugin {
 	async loadSettings(): Promise<void> {
 		const data = (await this.loadData()) as Partial<BeadsSettings> | null;
 		this.settings = { ...DEFAULT_SETTINGS, ...(data ?? {}) };
+		this.settings.savedAssignees = parseSavedAssignees(this.settings.savedAssignees);
+		this.settings.hiddenAssignees = parsePatterns(this.settings.hiddenAssignees);
 	}
 
 	async saveSettings(): Promise<void> {
@@ -119,6 +144,26 @@ export default class BeadsPlugin extends Plugin {
 		const leaf = workspace.getLeaf("tab");
 		await leaf.setViewState({
 			type: VIEW_TYPE_BEADS_EDITOR,
+			active: true,
+			state: { id },
+		});
+		await workspace.revealLeaf(leaf);
+	}
+
+	/**
+	 * Show a bead's lineage graph. Re-uses an open lineage view (re-centring it,
+	 * so Back returns to the previous bead); otherwise opens one in a split
+	 * beside the current tab.
+	 */
+	async openLineage(id: string): Promise<void> {
+		const { workspace } = this.app;
+		// setViewState (not view.focus) so a deferred, not-yet-loaded tab works
+		// too; the view's setState re-centres and records Back history.
+		const leaf =
+			workspace.getLeavesOfType(VIEW_TYPE_BEADS_LINEAGE)[0] ??
+			workspace.getLeaf("split", "vertical");
+		await leaf.setViewState({
+			type: VIEW_TYPE_BEADS_LINEAGE,
 			active: true,
 			state: { id },
 		});
