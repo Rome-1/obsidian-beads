@@ -1,5 +1,5 @@
 import { execFile } from "child_process";
-import { BeadIssue } from "./types";
+import type { BeadIssue } from "./types";
 
 /**
  * Thin wrapper around the `bd` CLI.
@@ -22,13 +22,16 @@ export interface BdResult {
 }
 
 export class BdError extends Error {
-	constructor(
-		message: string,
-		readonly stderr: string = "",
-		readonly cause?: unknown,
-	) {
+	// Explicit fields (not constructor parameter properties) so Node's type
+	// stripping can load this module in unit tests.
+	readonly stderr: string;
+	readonly cause?: unknown;
+
+	constructor(message: string, stderr = "", cause?: unknown) {
 		super(message);
 		this.name = "BdError";
+		this.stderr = stderr;
+		this.cause = cause;
 	}
 }
 
@@ -99,15 +102,40 @@ async function run(args: string[], opts: BdOptions): Promise<BdResult> {
 	}
 }
 
-function parseIssues(stdout: string): BeadIssue[] {
-	const trimmed = stdout.trim();
-	if (!trimmed) return [];
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(trimmed);
-	} catch (e) {
-		throw new BdError(`Could not parse bd JSON output: ${String(e)}`);
+/**
+ * bd's JSON envelope: with `BD_JSON_ENVELOPE=1` (the default from bd v2.0)
+ * every `--json` command prints `{"schema_version": n, "data": <payload>}`
+ * instead of the bare payload. Accept both, so the plugin works on bd 1.x
+ * and 2.x alike. (Legacy object commands like `create` also carry a top-level
+ * `schema_version`, but never a `data` key, so they pass through unchanged.)
+ */
+export function unwrapEnvelope(parsed: unknown): unknown {
+	if (
+		parsed &&
+		typeof parsed === "object" &&
+		!Array.isArray(parsed) &&
+		"schema_version" in parsed &&
+		"data" in parsed
+	) {
+		return (parsed as { data: unknown }).data;
 	}
+	return parsed;
+}
+
+/** Parse bd `--json` output (either format) — throws BdError on invalid JSON. */
+function parseJson(stdout: string, what: string): unknown {
+	const trimmed = stdout.trim();
+	if (!trimmed) return null;
+	try {
+		return unwrapEnvelope(JSON.parse(trimmed) as unknown);
+	} catch (e) {
+		throw new BdError(`Could not parse bd ${what} JSON: ${String(e)}`);
+	}
+}
+
+/** Issue-list or single-issue output → issues. Exported for unit tests. */
+export function parseIssues(stdout: string): BeadIssue[] {
+	const parsed = parseJson(stdout, "issue");
 	if (Array.isArray(parsed)) return parsed as BeadIssue[];
 	if (parsed && typeof parsed === "object") return [parsed as BeadIssue];
 	return [];
@@ -189,9 +217,10 @@ async function readCached(args: string[], opts: BdOptions): Promise<BeadIssue[]>
 export async function bdReady(
 	opts: BdOptions,
 	limit: number,
+	filterArgs: string[] = [],
 ): Promise<BeadIssue[]> {
 	const { stdout } = await run(
-		["ready", "--json", "--limit", String(limit)],
+		["ready", "--json", "--limit", String(limit), ...filterArgs],
 		opts,
 	);
 	return parseIssues(stdout);
@@ -207,17 +236,105 @@ export async function bdBlocked(opts: BdOptions): Promise<BeadIssue[]> {
 	return parseIssues(stdout);
 }
 
-/** `bd list --status <status> --json` — issues in one stored status. */
+/**
+ * `bd list --status <status> --json` — issues in one stored status.
+ * `filterArgs` are bd filter flags (see filter.ts) — bd does the filtering.
+ */
 export async function bdByStatus(
 	opts: BdOptions,
 	status: string,
 	limit: number,
+	filterArgs: string[] = [],
 ): Promise<BeadIssue[]> {
 	const { stdout } = await run(
-		["list", "--status", status, "--json", "--no-pager", "--limit", String(limit)],
+		[
+			"list",
+			"--status",
+			status,
+			"--json",
+			"--no-pager",
+			"--limit",
+			String(limit),
+			...filterArgs,
+		],
 		opts,
 	);
 	return parseIssues(stdout);
+}
+
+/** `bd count --status <status> [filters] --json` → the number of matching issues. */
+export async function bdCount(
+	opts: BdOptions,
+	status: string,
+	filterArgs: string[] = [],
+): Promise<number> {
+	const { stdout } = await run(["count", "--status", status, ...filterArgs, "--json"], opts);
+	return parseCount(stdout);
+}
+
+// --- filter options (for the pane's filter dropdowns) ---------------------
+
+/** `bd label list-all --json` → label names, most used first. */
+export async function bdLabelNames(opts: BdOptions): Promise<string[]> {
+	const { stdout } = await run(["label", "list-all", "--json"], opts);
+	return parseLabelNames(stdout);
+}
+
+/** `bd count --by-assignee --json` → assignee names, most used first. */
+export async function bdAssigneeNames(opts: BdOptions): Promise<string[]> {
+	const { stdout } = await run(["count", "--by-assignee", "--json"], opts);
+	return parseAssigneeNames(stdout);
+}
+
+/** `bd types --json` → every valid issue type (core + `types.custom`). */
+export async function bdTypeNames(opts: BdOptions): Promise<string[]> {
+	const { stdout } = await run(["types", "--json"], opts);
+	return parseTypeNames(stdout);
+}
+
+/** `{"count": n}` → n. */
+export function parseCount(stdout: string): number {
+	const d = parseJson(stdout, "count") as { count?: unknown } | null;
+	return typeof d?.count === "number" ? d.count : 0;
+}
+
+/** `[{"label": "x", "count": n}, …]` → names sorted by count desc, then name. */
+export function parseLabelNames(stdout: string): string[] {
+	const d = parseJson(stdout, "label");
+	if (!Array.isArray(d)) return [];
+	return (d as { label?: unknown; count?: unknown }[])
+		.filter((r) => typeof r?.label === "string" && r.label !== "")
+		.sort((a, b) => Number(b.count ?? 0) - Number(a.count ?? 0) || String(a.label).localeCompare(String(b.label)))
+		.map((r) => r.label as string);
+}
+
+/**
+ * `{"groups": [{"group": "alice", "count": n}, …]}` → assignee names sorted by
+ * count desc. bd's "(unassigned)" group is dropped — the pane offers
+ * "Unassigned" as its own option.
+ */
+export function parseAssigneeNames(stdout: string): string[] {
+	const d = parseJson(stdout, "count") as { groups?: unknown } | null;
+	if (!Array.isArray(d?.groups)) return [];
+	return (d.groups as { group?: unknown; count?: unknown }[])
+		.filter((g) => typeof g?.group === "string" && g.group !== "" && g.group !== "(unassigned)")
+		.sort((a, b) => Number(b.count ?? 0) - Number(a.count ?? 0) || String(a.group).localeCompare(String(b.group)))
+		.map((g) => g.group as string);
+}
+
+/** `{"core_types": [{"name": …}], "custom_types": ["…"]}` → core then custom names. */
+export function parseTypeNames(stdout: string): string[] {
+	const d = parseJson(stdout, "types") as { core_types?: unknown; custom_types?: unknown } | null;
+	const names: string[] = [];
+	for (const t of Array.isArray(d?.core_types) ? d.core_types : []) {
+		const name = typeof t === "string" ? t : (t as { name?: unknown })?.name;
+		if (typeof name === "string" && name) names.push(name);
+	}
+	for (const t of Array.isArray(d?.custom_types) ? d.custom_types : []) {
+		const name = typeof t === "string" ? t : (t as { name?: unknown })?.name;
+		if (typeof name === "string" && name) names.push(name);
+	}
+	return [...new Set(names)];
 }
 
 /** `bd show --json -- <id>` → the single issue (or null if not found). */
@@ -334,6 +451,10 @@ export async function bdCreate(
 export interface BdUpdateFields {
 	title?: string;
 	description?: string;
+	design?: string;
+	notes?: string;
+	/** Acceptance criteria (`--acceptance`). Empty string clears any text field. */
+	acceptance?: string;
 	priority?: number;
 	type?: string;
 	status?: string;
@@ -350,11 +471,20 @@ export async function bdUpdate(
 	id: string,
 	f: BdUpdateFields,
 ): Promise<void> {
+	await run(buildUpdateArgs(id, f), opts);
+	invalidateReadCache();
+}
+
+/** The argv for `bd update` — exported so the flag mapping is unit-testable. */
+export function buildUpdateArgs(id: string, f: BdUpdateFields): string[] {
 	const args = ["update"];
 	// `--flag=value` form keeps every value a single argv token, so a value
 	// starting with `-` (or containing spaces/newlines) is taken verbatim.
 	if (f.title !== undefined) args.push(`--title=${f.title}`);
 	if (f.description !== undefined) args.push(`--description=${f.description}`);
+	if (f.design !== undefined) args.push(`--design=${f.design}`);
+	if (f.notes !== undefined) args.push(`--notes=${f.notes}`);
+	if (f.acceptance !== undefined) args.push(`--acceptance=${f.acceptance}`);
 	if (f.priority !== undefined) args.push(`--priority=${f.priority}`);
 	if (f.type !== undefined) args.push(`--type=${f.type}`);
 	if (f.status !== undefined) args.push(`--status=${f.status}`);
@@ -362,8 +492,7 @@ export async function bdUpdate(
 	for (const l of f.addLabels ?? []) args.push(`--add-label=${l}`);
 	for (const l of f.removeLabels ?? []) args.push(`--remove-label=${l}`);
 	args.push("--", id);
-	await run(args, opts);
-	invalidateReadCache();
+	return args;
 }
 
 export interface BdComment {
@@ -383,14 +512,12 @@ export async function bdComments(
 	id: string,
 ): Promise<BdComment[]> {
 	const { stdout } = await run(["comments", "--json", "--", id], opts);
-	const trimmed = stdout.trim();
-	if (!trimmed) return [];
-	try {
-		const parsed: unknown = JSON.parse(trimmed);
-		return Array.isArray(parsed) ? (parsed as BdComment[]) : [];
-	} catch (e) {
-		throw new BdError(`Could not parse bd comments JSON: ${String(e)}`);
-	}
+	return parseComments(stdout);
+}
+
+export function parseComments(stdout: string): BdComment[] {
+	const parsed = parseJson(stdout, "comments");
+	return Array.isArray(parsed) ? (parsed as BdComment[]) : [];
 }
 
 /** Cheap probe used to validate settings: `bd --version`. */
@@ -400,25 +527,10 @@ export async function bdVersion(opts: BdOptions): Promise<string> {
 }
 
 /**
- * The `summary` block of `bd status --json` — per-status counts in one cheap
- * call (keys like `ready_issues`, `blocked_issues`, `closed_issues`, ...).
+ * Ready-issue count (for the status bar): the length of `bd ready --limit 0`,
+ * so it matches the Ready tab. Not `bd status`'s ready_issues, which
+ * undercounts (see `tabCounts` in filter.ts).
  */
-export async function bdStatusCounts(
-	opts: BdOptions,
-): Promise<Record<string, number>> {
-	const { stdout } = await run(["status", "--json"], opts);
-	try {
-		const d = JSON.parse(stdout.trim()) as {
-			summary?: Record<string, number>;
-		};
-		return d?.summary ?? {};
-	} catch {
-		return {};
-	}
-}
-
-/** Ready-issue count (for the status bar). */
 export async function bdReadyCount(opts: BdOptions): Promise<number> {
-	const counts = await bdStatusCounts(opts);
-	return counts.ready_issues ?? 0;
+	return (await bdReady(opts, 0)).length;
 }

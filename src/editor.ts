@@ -4,6 +4,7 @@ import {
 	Notice,
 	MarkdownRenderer,
 	ViewStateResult,
+	setIcon,
 } from "obsidian";
 import { existsSync } from "fs";
 import { join } from "path";
@@ -16,13 +17,23 @@ import {
 	EDITABLE_STATUSES,
 } from "./types";
 import { renderPriorityDot } from "./row";
+import { renderMarkdownField, MarkdownFieldHandle } from "./mdfield";
+import {
+	EditModel,
+	TEXT_FIELDS,
+	TextField,
+	blankModel,
+	cloneModel,
+	diffModel,
+	modelFromIssue,
+	modelsEqual,
+} from "./editmodel";
 import {
 	bdShow,
 	bdUpdate,
 	bdCreate,
 	bdDepList,
 	bdComments,
-	BdUpdateFields,
 	BdError,
 	BdOptions,
 } from "./bd";
@@ -31,17 +42,6 @@ interface EditorState {
 	id?: string;
 	/** Open a blank editor to create a new bead (no id yet). */
 	create?: boolean;
-}
-
-/** The editable snapshot of a bead's fields. */
-interface EditModel {
-	title: string;
-	status: string;
-	priority: number;
-	type: string;
-	assignee: string;
-	labels: string[];
-	description: string;
 }
 
 /**
@@ -61,6 +61,7 @@ export class BeadEditorView extends ItemView {
 	private orig: EditModel = blankModel();
 	private saveBtn: HTMLButtonElement | null = null;
 	private revertBtn: HTMLButtonElement | null = null;
+	private textFields: MarkdownFieldHandle[] = [];
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -71,6 +72,10 @@ export class BeadEditorView extends ItemView {
 
 	getViewType(): string {
 		return VIEW_TYPE_BEADS_EDITOR;
+	}
+	/** The bead this tab edits (null while creating a new one). */
+	get beadId(): string | null {
+		return this.issue?.id ?? null;
 	}
 	getIcon(): string {
 		return "list-checks";
@@ -111,6 +116,7 @@ export class BeadEditorView extends ItemView {
 	}
 
 	onClose(): Promise<void> {
+		this.disposeTextFields();
 		this.contentEl.empty();
 		return Promise.resolve();
 	}
@@ -124,6 +130,7 @@ export class BeadEditorView extends ItemView {
 
 	private message(text: string, isError = false): void {
 		const root = this.contentEl;
+		this.disposeTextFields();
 		root.empty();
 		root.addClass("beads-editor");
 		root.createDiv({
@@ -175,6 +182,7 @@ export class BeadEditorView extends ItemView {
 		const issue = this.issue;
 		if (!creating && !issue) return;
 		const root = this.contentEl;
+		this.disposeTextFields();
 		root.empty();
 		root.addClass("beads-editor");
 
@@ -184,10 +192,24 @@ export class BeadEditorView extends ItemView {
 
 		// Toolbar: id/label + actions (Create for a new bead, Revert/Save to edit).
 		const bar = root.createDiv({ cls: "beads-editor-bar" });
-		bar.createDiv({
+		const idWrap = bar.createDiv({ cls: "beads-editor-idwrap" });
+		idWrap.createSpan({
 			cls: "beads-editor-id",
 			text: issue ? issue.id : "New bead",
 		});
+		if (issue) {
+			const copy = idWrap.createEl("button", {
+				cls: "clickable-icon beads-editor-copy",
+				attr: { "aria-label": "Copy bead ID" },
+			});
+			setIcon(copy, "copy");
+			copy.onclick = () => {
+				navigator.clipboard.writeText(issue.id).then(
+					() => new Notice(`Copied ${issue.id}`),
+					(e) => new Notice(`Beads: couldn't copy: ${String(e)}`),
+				);
+			};
+		}
 		const actions = bar.createDiv({ cls: "beads-editor-actions" });
 		if (creating) {
 			this.revertBtn = null;
@@ -198,6 +220,14 @@ export class BeadEditorView extends ItemView {
 			this.saveBtn.disabled = true;
 			this.saveBtn.onclick = () => void this.save();
 		} else {
+			const lineage = actions.createEl("button", {
+				cls: "clickable-icon",
+				attr: { "aria-label": "Show lineage" },
+			});
+			setIcon(lineage, "git-fork");
+			lineage.onclick = () => {
+				if (issue) void this.plugin.openLineage(issue.id);
+			};
 			this.revertBtn = actions.createEl("button", { text: "Revert" });
 			this.saveBtn = actions.createEl("button", { cls: "mod-cta", text: "Save" });
 			this.saveBtn.disabled = true;
@@ -270,17 +300,26 @@ export class BeadEditorView extends ItemView {
 		});
 		this.propRow(props, "Labels", (cell) => this.renderLabels(cell));
 
-		// Description — a comfortable, note-style body (not a monospace blob).
-		root.createDiv({ cls: "beads-editor-section", text: "Description" });
-		const ta = root.createEl("textarea", {
-			cls: "beads-editor-desc",
-			attr: { placeholder: "Add a description…" },
-		});
-		ta.value = this.model.description;
-		ta.addEventListener("input", () => {
-			this.model.description = ta.value;
-			this.syncDirty();
-		});
+		// Text fields — rendered markdown like a note; click to edit the raw text.
+		// A new bead only gets the description (straight into edit mode); an
+		// existing one shows every non-empty field plus "+ add" for the rest.
+		const text = root.createDiv({ cls: "beads-editor-text" });
+		const addRow = root.createDiv({ cls: "beads-mdfield-add" });
+		for (const field of TEXT_FIELDS) {
+			const isDesc = field.key === "description";
+			if (creating && !isDesc) continue;
+			if (isDesc || this.model[field.key].trim()) {
+				this.textField(text, field, creating);
+				continue;
+			}
+			const btn = addRow.createEl("button", { text: `+ ${field.label}` });
+			btn.onclick = () => {
+				btn.remove();
+				if (!addRow.childElementCount) addRow.remove();
+				this.textField(text, field, true);
+			};
+		}
+		if (!addRow.childElementCount) addRow.remove();
 
 		// Provenance + dependencies + comments — only for an existing bead.
 		if (issue) {
@@ -300,6 +339,38 @@ export class BeadEditorView extends ItemView {
 		} else {
 			titleInput.focus();
 		}
+	}
+
+	/**
+	 * Release every text field (preview components + edit-mode document
+	 * listeners). Call before anything empties `contentEl`.
+	 */
+	private disposeTextFields(): void {
+		for (const f of this.textFields) f.dispose();
+		this.textFields = [];
+	}
+
+	private textField(
+		parent: HTMLElement,
+		field: TextField,
+		startEditing: boolean,
+	): void {
+		this.textFields.push(
+			renderMarkdownField(parent, {
+				app: this.app,
+				owner: this,
+				label: field.label,
+				placeholder: field.placeholder,
+				value: this.model[field.key],
+				startEditing,
+				// Creating: the title gets focus; the description opens ready to click into.
+				focus: !(this.creating && !this.issue),
+				onChange: (value) => {
+					this.model[field.key] = value;
+					this.syncDirty();
+				},
+			}),
+		);
 	}
 
 	private propRow(
@@ -392,20 +463,7 @@ export class BeadEditorView extends ItemView {
 			return;
 		}
 
-		const f: BdUpdateFields = {};
-		if (title !== issue.title) f.title = title;
-		if (this.model.type !== issue.issue_type) f.type = this.model.type;
-		if (this.model.priority !== (issue.priority ?? 2)) f.priority = this.model.priority;
-		if (this.model.status !== issue.status) f.status = this.model.status;
-		if (this.model.assignee !== (issue.assignee ?? "")) f.assignee = this.model.assignee;
-		if (this.model.description.trimEnd() !== (issue.description ?? "").trimEnd()) {
-			f.description = this.model.description;
-		}
-		const old = issue.labels ?? [];
-		const add = this.model.labels.filter((l) => !old.includes(l));
-		const rem = old.filter((l) => !this.model.labels.includes(l));
-		if (add.length) f.addLabels = add;
-		if (rem.length) f.removeLabels = rem;
+		const f = diffModel(this.model, issue);
 
 		if (Object.keys(f).length === 0) {
 			new Notice("Beads: no changes.");
@@ -547,47 +605,4 @@ export class BeadEditorView extends ItemView {
 			await MarkdownRenderer.render(this.app, c.text ?? "", bodyEl, "", this);
 		}
 	}
-}
-
-// --- model helpers -------------------------------------------------------
-
-function blankModel(): EditModel {
-	return {
-		title: "",
-		status: "open",
-		priority: 2,
-		type: "task",
-		assignee: "",
-		labels: [],
-		description: "",
-	};
-}
-
-function modelFromIssue(issue: BeadIssue): EditModel {
-	return {
-		title: issue.title ?? "",
-		status: issue.status ?? "open",
-		priority: issue.priority ?? 2,
-		type: issue.issue_type ?? "task",
-		assignee: issue.assignee ?? "",
-		labels: [...(issue.labels ?? [])],
-		description: issue.description ?? "",
-	};
-}
-
-function cloneModel(m: EditModel): EditModel {
-	return { ...m, labels: [...m.labels] };
-}
-
-function modelsEqual(a: EditModel, b: EditModel): boolean {
-	return (
-		a.title === b.title &&
-		a.status === b.status &&
-		a.priority === b.priority &&
-		a.type === b.type &&
-		a.assignee === b.assignee &&
-		a.description === b.description &&
-		a.labels.length === b.labels.length &&
-		a.labels.every((l, i) => l === b.labels[i])
-	);
 }

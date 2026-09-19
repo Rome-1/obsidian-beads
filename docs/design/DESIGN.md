@@ -172,7 +172,7 @@ pane — no independent polling loop.
 
 Rejected deliberately — each would cost more than it pays:
 
-- **Dependency graph visualization** — `bd graph --html` already does it better; an embedded webview is reviewer bait.
+- ~~**Dependency graph visualization**~~ — *revisited 2026-09-18:* `bd graph --html` is a separate page that loads D3 from a CDN, and poured beads need their lineage in context. A focused, DOM-built lineage view (no webview, no Mermaid) was prototyped — see `LINEAGE-GRAPH.md`.
 - **Kanban / board / drag-and-drop** — huge surface, zero new information; Obsidian's board plugins own this.
 - **In-plugin editing forms** (priority, labels, assignee, description) — a form is never faster than the CLI; forms are where scope and bugs breed.
 - **Two-way markdown↔bead sync** (vault tasks mirroring beads) — sync is a correctness tarpit with ownership ambiguity; the code block gives live views with bd as sole owner.
