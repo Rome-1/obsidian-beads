@@ -50,4 +50,11 @@ export interface BeadIssue {
 	labels?: string[];
 	/** Present only on records returned by `bd dep list`. */
 	dependency_type?: string;
+	/** Open blockers, from `bd blocked` (it does not emit dependency_count). */
+	blocked_by_count?: number;
+	/** Set on events-journal records; a missing field means false. */
+	is_blocked?: boolean;
+	defer_until?: string;
+	ephemeral?: boolean;
+	pinned?: boolean;
 }

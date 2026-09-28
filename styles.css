@@ -24,6 +24,39 @@
 	gap: 2px;
 }
 
+/* Live-updates dot: filled when following bd events, hollow when polling. */
+.beads-live {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	border: 1px solid var(--text-faint);
+	margin-right: auto;
+	margin-left: 2px;
+}
+.beads-live.is-live {
+	background: var(--color-green);
+	border-color: var(--color-green);
+}
+
+/* One-time offer to turn on the events journal. */
+.beads-offer {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 8px;
+	margin: 4px 8px 6px;
+	padding: 6px 8px;
+	border-radius: var(--radius-s);
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+.beads-offer-actions {
+	display: flex;
+	gap: 6px;
+	margin-left: auto;
+}
+
 .beads-count {
 	color: var(--text-muted);
 	font-weight: var(--font-normal);
@@ -341,6 +374,12 @@ select.beads-prop-input {
 	margin-top: 8px;
 }
 
+.beads-editor-stale {
+	margin: 4px 0 8px;
+	color: var(--text-warning);
+	font-size: var(--font-ui-small);
+}
+
 /* Dependency lists (shared by editor) */
 .beads-dep-list {
 	display: flex;
@@ -445,4 +484,7 @@ select.beads-prop-input {
 /* Status bar */
 .beads-statusbar {
 	color: var(--text-muted);
+}
+.beads-statusbar.is-error {
+	color: var(--text-error);
 }

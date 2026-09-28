@@ -132,8 +132,36 @@ export class BeadEditorView extends ItemView {
 		});
 	}
 
-	/** (Re)load the bead from bd and render it. Safe to call repeatedly. */
-	private async reload(): Promise<void> {
+	/**
+	 * A bead changed outside this editor (`ids`, or null for "anything").
+	 * Reload if it is this bead and nothing is being edited; with unsaved
+	 * edits, say so instead of discarding them.
+	 */
+	onExternalChange(ids: Set<string> | null): void {
+		if (!this.id || !this.issue) return;
+		if (ids && !ids.has(this.id)) return;
+		if (this.isDirty()) {
+			this.contentEl.querySelector(".beads-editor-stale")?.remove();
+			const note = createDiv({
+				cls: "beads-editor-stale",
+				text: "This bead changed outside the editor. Revert to load the new version.",
+			});
+			this.contentEl.querySelector(".beads-editor-bar")?.after(note);
+			return;
+		}
+		void this.reload(true);
+	}
+
+	private isDirty(): boolean {
+		return !modelsEqual(this.model, this.orig);
+	}
+
+	/**
+	 * (Re)load the bead from bd and render it. Safe to call repeatedly.
+	 * `quiet`: a background refresh — keep what is shown on error, and don't
+	 * render over edits the user started while the read was in flight.
+	 */
+	private async reload(quiet = false): Promise<void> {
 		if (this.creating && !this.id) {
 			this.issue = null;
 			this.render(); // blank create form
@@ -154,6 +182,7 @@ export class BeadEditorView extends ItemView {
 		try {
 			const issue = await bdShow(opts, this.id);
 			if (seq !== this.loadSeq) return;
+			if (quiet && this.isDirty()) return;
 			if (!issue) {
 				this.message(`No issue found for ${this.id}.`, true);
 				return;
@@ -163,7 +192,7 @@ export class BeadEditorView extends ItemView {
 			const leaf = this.leaf as unknown as { updateHeader?: () => void };
 			leaf.updateHeader?.();
 		} catch (e) {
-			if (seq !== this.loadSeq) return;
+			if (seq !== this.loadSeq || quiet) return;
 			this.message(e instanceof BdError ? e.message : String(e), true);
 		}
 	}
@@ -203,7 +232,8 @@ export class BeadEditorView extends ItemView {
 			this.saveBtn.disabled = true;
 			this.revertBtn.disabled = true;
 			this.saveBtn.onclick = () => void this.save();
-			this.revertBtn.onclick = () => this.render(); // re-derive from this.issue
+			// Re-read from bd, so Revert also picks up outside changes.
+			this.revertBtn.onclick = () => void this.reload();
 		}
 
 		// Title — prominent, like a note's inline title.
