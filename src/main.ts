@@ -86,7 +86,9 @@ export default class BeadsPlugin extends Plugin {
 			onStatus: (st) => this.onFeedStatus(st),
 		});
 		this.feedRoot = this.settings.projectRoot;
-		void this.feed.start();
+		// The pane may read before the follower's checkpoint is set; a write in
+		// that gap would be missed, so rebuild once the feed is running.
+		void this.feed.start().then(() => this.onRebuild("start"));
 		// Quitting Obsidian doesn't always unload plugins; stop the follower anyway.
 		this.registerDomEvent(window, "beforeunload", () => this.feed.stop());
 		this.scheduleCounts(0);
@@ -207,13 +209,16 @@ export default class BeadsPlugin extends Plugin {
 	/** Journal records: patch what is on screen instead of re-listing. */
 	private onRecords(recs: JournalRecord[]): void {
 		for (const view of this.panes()) view.applyRecords(recs);
-		if (recs.some((r) => affectsCounts(r, this.seen))) this.scheduleCounts();
+		let recount = false;
+		for (const r of recs) recount = affectsCounts(r, this.seen) || recount;
+		if (recount) this.scheduleCounts();
 		const ids = new Set(recs.map((r) => r.issue_id));
 		for (const ed of this.editors()) ed.onExternalChange(ids);
 		this.scheduleEmbeds();
 	}
 
 	private onRebuild(reason: string): void {
+		this.seen.clear();
 		this.refreshViews();
 		// Embeds never re-read on a timer (many blocks × a timer is a process
 		// storm); editors follow real changes only.

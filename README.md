@@ -129,7 +129,9 @@ Some changes never reach the journal: `bd dolt pull` and other syncs, `bd sql`, 
 switch to another clone (each clone numbers its own journal). While live, the plugin
 checks the workspace's Dolt commit every **Auto-refresh interval** seconds (one cheap
 `bd vc status`); if it moved with no journal record to explain it, the pane rebuilds from
-current state. If the plugin falls behind the journal's retention window (7 days or
+current state. A sync that lands in the same interval as a local write can't be told
+apart this way, and a defer date passing changes Ready without any record, so the pane
+also re-reads every tenth check (every 5 minutes by default). If the plugin falls behind the journal's retention window (7 days or
 100,000 records by default, for example after the computer sleeps for a week), `bd`
 reports the gap and the plugin rebuilds, then follows from the newest record.
 

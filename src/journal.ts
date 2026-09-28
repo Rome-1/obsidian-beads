@@ -15,6 +15,11 @@ export function parseRecord(line: string): JournalRecord | null {
 	try {
 		const r = JSON.parse(line) as Partial<JournalRecord>;
 		if (typeof r.seq !== "number" || typeof r.issue_id !== "string") return null;
+		// A record whose issue lacks an id/status can't be placed; drop it
+		// rather than let one malformed synced row break rendering.
+		if (r.issue && (typeof r.issue.id !== "string" || typeof r.issue.status !== "string")) {
+			return null;
+		}
 		return r as JournalRecord;
 	} catch {
 		return null;
@@ -87,8 +92,14 @@ export function applyRecord(
 		if (fit === "no") {
 			if (at !== -1) tab.issues.splice(at, 1);
 		} else if (at !== -1) {
-			// Keep list-only fields (counts) that journal records don't carry.
-			tab.issues[at] = { ...tab.issues[at], ...rec.issue };
+			// Records carry full state but omit list-only counts; keep only those,
+			// so a field bd dropped (is_blocked, a cleared assignee) stays dropped.
+			const old = tab.issues[at];
+			tab.issues[at] = {
+				...rec.issue,
+				blocked_by_count: old.blocked_by_count,
+				dependency_count: old.dependency_count,
+			};
 			tab.issues = byPriority(tab.issues);
 			if (rec.op === "dep_add" || rec.op === "dep_remove") stale.add(key);
 		} else if (fit === "yes" && !tab.hasMore) {
