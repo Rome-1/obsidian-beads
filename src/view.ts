@@ -41,6 +41,8 @@ export class BeadsView extends ItemView {
 	private baseState: "ok" | "no-root" | "no-db" = "no-root";
 	private loadSeq = 0;
 	private reloadTimer: number | null = null;
+	/** Records arrived during a read; read once more when it finishes. */
+	private reloadAgain = false;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -80,12 +82,14 @@ export class BeadsView extends ItemView {
 		for (const rec of recs) {
 			for (const k of applyRecord(this.tabs, rec)) stale.add(k);
 		}
-		// A read in flight may predate these records; let a fresh one win.
-		if (this.tabs[this.active].loading) stale.add(this.active);
 		for (const k of stale) {
 			if (k !== this.active) this.tabs[k].loaded = false;
 		}
-		if (stale.has(this.active)) {
+		// A read in flight may predate these records. Don't cancel it (under a
+		// steady stream of writes nothing would ever finish); queue one more.
+		if (this.tabs[this.active].loading) {
+			this.reloadAgain = true;
+		} else if (stale.has(this.active)) {
 			if (this.reloadTimer !== null) window.clearTimeout(this.reloadTimer);
 			this.reloadTimer = window.setTimeout(() => {
 				this.reloadTimer = null;
@@ -180,6 +184,10 @@ export class BeadsView extends ItemView {
 			if (mySeq === this.loadSeq) {
 				tab.loading = false;
 				this.render();
+				if (this.reloadAgain) {
+					this.reloadAgain = false;
+					void this.loadTab(this.active);
+				}
 			}
 		}
 	}

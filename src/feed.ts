@@ -51,6 +51,11 @@ const FS_DEBOUNCE_MS = 400;
 // Follow polls the journal once a second; give a record that long to land
 // before deciding a moved commit was unjournaled.
 const RECORD_GRACE_MS = 2_500;
+// Every this many heartbeats, rebuild regardless. The commit check can't tell
+// a sync from local writes landing in the same interval, and a defer date
+// passing changes Ready with no record at all; this bounds how long either
+// can stay stale (5 minutes at the default 30 s) for two cheap reads.
+const RECONCILE_EVERY = 10;
 
 /**
  * POSIX wrapper that ties the follower's life to ours. Obsidian doesn't
@@ -88,6 +93,8 @@ export class BeadsFeed {
 	private lastSeq = 0;
 	private recordsSinceBeat = 0;
 	private lastCommit = "";
+	private beats = 0;
+	private beating = false;
 	private failures = 0;
 	private retryTimer: number | null = null;
 
@@ -250,25 +257,31 @@ export class BeadsFeed {
 	 */
 	private async heartbeat(gen: number): Promise<void> {
 		const opts = this.host.bdOptions();
-		if (!opts) return;
-		const before = this.recordsSinceBeat;
-		let commit: string;
+		if (!opts || this.beating) return;
+		this.beating = true;
 		try {
-			commit = await bdHeadCommit(opts);
-		} catch {
-			return;
-		}
-		if (gen !== this.gen || !commit || commit === this.lastCommit) return;
-		if (before === 0) {
-			await new Promise((r) => window.setTimeout(r, RECORD_GRACE_MS));
-			if (gen !== this.gen) return;
-			if (this.recordsSinceBeat === 0) {
+			if (++this.beats % RECONCILE_EVERY === 0) {
 				invalidateReadCache();
-				this.host.onRebuild("unjournaled change");
+				this.host.onRebuild("timer"); // same as polling: embeds and editors untouched
 			}
+			const before = this.recordsSinceBeat;
+			const commit = await bdHeadCommit(opts);
+			if (gen !== this.gen || !commit || commit === this.lastCommit) return;
+			if (before === 0) {
+				await new Promise((r) => window.setTimeout(r, RECORD_GRACE_MS));
+				if (gen !== this.gen) return;
+				if (this.recordsSinceBeat === 0) {
+					invalidateReadCache();
+					this.host.onRebuild("unjournaled change");
+				}
+			}
+			this.lastCommit = commit;
+			this.recordsSinceBeat = 0;
+		} catch {
+			/* bd busy or broken: try again next beat */
+		} finally {
+			this.beating = false;
 		}
-		this.lastCommit = commit;
-		this.recordsSinceBeat = 0;
 	}
 
 	private spawnFollow(opts: BdOptions, gen: number): void {
@@ -302,13 +315,14 @@ export class BeadsFeed {
 			const lines = buf.split("\n");
 			buf = lines.pop() ?? "";
 			const batch: JournalRecord[] = [];
+			if (gen !== this.gen) return; // a stopped follower's late output
 			for (const line of lines) {
 				const rec = line.startsWith("{") ? parseRecord(line) : null;
 				if (!rec || rec.seq <= this.lastSeq) continue;
 				this.lastSeq = rec.seq;
 				batch.push(rec);
 			}
-			if (batch.length && gen === this.gen) {
+			if (batch.length) {
 				this.recordsSinceBeat += batch.length;
 				invalidateReadCache();
 				this.host.onRecords(batch);
@@ -335,21 +349,22 @@ export class BeadsFeed {
 		errTail: string,
 		livedMs: number,
 	): Promise<void> {
-		if (/truncated/i.test(errTail)) {
+		this.failures = livedMs < 10_000 ? this.failures + 1 : 1;
+		if (/events journal truncated/i.test(errTail)) {
 			// Our checkpoint fell out of the retained window: records are
 			// missing, so rebuild from current state and follow from the head.
+			// If the head can't be read, fall through to the backoff below.
 			try {
 				this.lastSeq = await bdJournalHead(opts);
+				if (gen !== this.gen) return;
+				invalidateReadCache();
+				this.host.onRebuild("journal truncated");
+				this.spawnFollow(opts, gen);
+				return;
 			} catch {
-				/* retried below */
+				if (gen !== this.gen) return;
 			}
-			if (gen !== this.gen) return;
-			invalidateReadCache();
-			this.host.onRebuild("journal truncated");
-			this.spawnFollow(opts, gen);
-			return;
 		}
-		this.failures = livedMs < 10_000 ? this.failures + 1 : 1;
 		if (this.failures >= 5) {
 			const why = errTail.trim().split("\n").pop() || "bd events tail kept exiting";
 			if (this.timer !== null) window.clearInterval(this.timer);
