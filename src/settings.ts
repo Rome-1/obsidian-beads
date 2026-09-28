@@ -1,20 +1,27 @@
 import { App, PluginSettingTab, Setting, Notice } from "obsidian";
 import type BeadsPlugin from "./main";
 import { bdVersion } from "./bd";
+import { JournalModal } from "./view";
 
 export interface BeadsSettings {
 	/** Absolute path to the project root (the directory containing `.beads/`). */
 	projectRoot: string;
 	/** Path to the bd binary, or just "bd" to resolve via PATH. */
 	bdPath: string;
-	/** Auto-refresh interval in seconds (0 = disabled). */
+	/**
+	 * Seconds between re-reads while polling; with live updates, how often to
+	 * check for changes the journal can't see, like a sync (0 = never).
+	 */
 	refreshIntervalSec: number;
+	/** The user declined the in-pane offer to turn on the events journal. */
+	journalOfferDismissed: boolean;
 }
 
 export const DEFAULT_SETTINGS: BeadsSettings = {
 	projectRoot: "",
 	bdPath: "bd",
 	refreshIntervalSec: 30,
+	journalOfferDismissed: false,
 };
 
 export class BeadsSettingTab extends PluginSettingTab {
@@ -61,7 +68,9 @@ export class BeadsSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Auto-refresh interval")
-			.setDesc("Seconds between automatic refreshes (0 to disable).")
+			.setDesc(
+				"Seconds between automatic refreshes (0 to disable). With live updates on, the pane refreshes the moment a bead changes, and this only sets how often it checks for changes the journal can't see, such as a sync.",
+			)
 			.addText((text) =>
 				text
 					.setPlaceholder("30")
@@ -71,9 +80,25 @@ export class BeadsSettingTab extends PluginSettingTab {
 						this.plugin.settings.refreshIntervalSec =
 							Number.isFinite(n) && n >= 0 ? n : 0;
 						await this.plugin.saveSettings();
-						this.plugin.restartRefreshTimer();
+						this.plugin.restartFeed();
 					}),
 			);
+
+		const st = this.plugin.feed.current;
+		const live = new Setting(containerEl)
+			.setName("Live updates")
+			.setDesc(
+				st.mode === "journal"
+					? "On: the pane follows bd's events journal."
+					: `Off. ${st.detail.replace(/\.$/, "")}.`,
+			);
+		if (st.journalAvailable && st.mode !== "journal") {
+			live.addButton((btn) =>
+				btn.setButtonText("Turn on…").onClick(() => {
+					new JournalModal(this.plugin).open();
+				}),
+			);
+		}
 
 		new Setting(containerEl)
 			.setName("Test connection")
