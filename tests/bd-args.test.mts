@@ -9,6 +9,8 @@ import {
 	unwrapEnvelope,
 	parseLabelNames,
 	parseTypeNames,
+	parseBdVersion,
+	versionAtLeast,
 } from "../src/bd.ts";
 
 test("maps every text field to its bd flag, id after the -- sentinel", () => {
@@ -152,4 +154,24 @@ test("empty output parses to nothing", () => {
 	assert.deepEqual(parseIssues("  "), []);
 	assert.deepEqual(parseComments(""), []);
 	assert.equal(parseCount(""), 0);
+});
+
+// --- bd version detection (the events journal needs bd >= 1.3.0) ----------
+
+test("parseBdVersion pulls the triple out of bd --version output", () => {
+	assert.deepEqual(parseBdVersion("bd version 1.2.2 (Homebrew)"), [1, 2, 2]);
+	assert.deepEqual(parseBdVersion("bd version 1.3.0"), [1, 3, 0]);
+	assert.deepEqual(parseBdVersion("10.20.30"), [10, 20, 30]);
+	assert.equal(parseBdVersion("bd version dev"), null);
+	assert.equal(parseBdVersion(""), null);
+});
+
+test("versionAtLeast compares component-wise, not lexically", () => {
+	const min: [number, number, number] = [1, 3, 0];
+	assert.equal(versionAtLeast([1, 3, 0], min), true, "equal is at least");
+	assert.equal(versionAtLeast([1, 3, 1], min), true);
+	assert.equal(versionAtLeast([1, 10, 0], min), true, "10 > 3, not \"10\" < \"3\"");
+	assert.equal(versionAtLeast([2, 0, 0], min), true);
+	assert.equal(versionAtLeast([1, 2, 2], min), false, "the installed 1.2.2 has no journal");
+	assert.equal(versionAtLeast([0, 9, 9], min), false);
 });

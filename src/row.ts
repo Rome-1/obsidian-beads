@@ -47,10 +47,12 @@ export function renderIssueRow(
 	if (issue.issue_type) {
 		meta.createSpan({ cls: "beads-type", text: issue.issue_type });
 	}
-	if (handlers.showDeps && (issue.dependency_count ?? 0) > 0) {
+	const deps = issue.blocked_by_count ?? issue.dependency_count ?? 0;
+	if (handlers.showDeps && deps > 0) {
 		meta.createSpan({
 			cls: "beads-deps",
-			text: `⛓ ${issue.dependency_count}`,
+			text: `⛓ ${deps}`,
+			attr: { "aria-label": `Waiting on ${deps}` },
 		});
 	}
 

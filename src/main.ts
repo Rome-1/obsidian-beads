@@ -1,5 +1,5 @@
 import { FileSystemAdapter, Plugin, WorkspaceLeaf } from "obsidian";
-import { FSWatcher, watch, existsSync } from "fs";
+import { existsSync } from "fs";
 import { join } from "path";
 import {
 	BeadsSettings,
@@ -14,19 +14,39 @@ import {
 	VIEW_TYPE_BEADS_EDITOR,
 	VIEW_TYPE_BEADS_LINEAGE,
 } from "./types";
-import { bdReadyCount, invalidateReadCache } from "./bd";
+import { BdOptions, bdReadyCount, invalidateReadCache } from "./bd";
 import { registerBeadsCodeBlock } from "./codeblock";
+import { BeadsFeed, FeedStatus } from "./feed";
+import { JournalRecord, affectsCounts } from "./journal";
 import { parsePatterns, parseSavedAssignees } from "./filter";
 
 export default class BeadsPlugin extends Plugin {
 	settings!: BeadsSettings;
 
-	private refreshTimer: number | null = null;
-	private watcher: FSWatcher | null = null;
-	private watchedRoot: string | null = null;
-	private watchDebounce: number | null = null;
+	feed!: BeadsFeed;
+	/**
+	 * The status bar's ready count, from `bd ready --limit 0` — the same command
+	 * the Ready tab lists, NOT `bd status` (its `ready_issues` undercounts; see
+	 * `tabCounts` in filter.ts). null = not read yet, or the read failed.
+	 *
+	 * The pane's tab counts are per-view, because they follow that pane's
+	 * filter; only this unfiltered number is shared.
+	 */
+	readyCount: number | null = null;
+	/** Why the last count read failed (bd missing, broken store), if it did. */
+	private countsError = "";
+
 	private statusBarEl: HTMLElement | null = null;
-	private statusSeq = 0;
+	private countsTimer: number | null = null;
+	private countsInFlight = false;
+	private countsAgain = false;
+	private restartTimer: number | null = null;
+	private feedRoot = "";
+	/** Last count-relevant state per bead id, to skip needless recounts. */
+	private seen = new Map<string, string>();
+	/** Re-render callbacks of the `beads` code blocks currently on screen. */
+	readonly embeds = new Set<() => void>();
+	private embedTimer: number | null = null;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -88,13 +108,34 @@ export default class BeadsPlugin extends Plugin {
 		this.statusBarEl = this.addStatusBarItem();
 		this.statusBarEl.addClass("beads-statusbar");
 
-		this.restartRefreshTimer();
-		this.restartWatch();
-		this.updateStatusBar();
+		this.feed = new BeadsFeed({
+			bdOptions: () => this.bdOptions(),
+			refreshIntervalSec: () => this.settings.refreshIntervalSec,
+			onRecords: (recs) => this.onRecords(recs),
+			onRebuild: (reason) => this.onRebuild(reason),
+			onStatus: (st) => this.onFeedStatus(st),
+		});
+		this.feedRoot = this.settings.projectRoot;
+		// The pane may read before the follower's checkpoint is set; a write in
+		// that gap would be missed, so rebuild once the feed is running.
+		void this.feed.start().then(() => this.onRebuild("start"));
+		// Quitting Obsidian doesn't always unload plugins; stop the follower anyway.
+		this.registerDomEvent(window, "beforeunload", () => this.feed.stop());
+		this.scheduleCounts(0);
 	}
 
 	onunload(): void {
-		this.stopWatch();
+		this.feed.stop();
+		for (const t of [this.countsTimer, this.restartTimer, this.embedTimer]) {
+			if (t !== null) window.clearTimeout(t);
+		}
+	}
+
+	/** Options for a bd call, or null when no usable project root is set. */
+	bdOptions(): BdOptions | null {
+		const s = this.settings;
+		if (!s.projectRoot || !existsSync(join(s.projectRoot, ".beads"))) return null;
+		return { bdPath: s.bdPath, cwd: s.projectRoot };
 	}
 
 	async loadSettings(): Promise<void> {
@@ -106,8 +147,22 @@ export default class BeadsPlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
-		// Re-point the filesystem watcher if the project root changed.
-		this.restartWatch();
+		// A new root is a different workspace (and journal): start over.
+		if (this.settings.projectRoot !== this.feedRoot) this.restartFeed();
+	}
+
+	/**
+	 * Re-detect bd and restart the feed, then rebuild. Debounced, since
+	 * settings text fields save on every keystroke.
+	 */
+	restartFeed(delayMs = 600): void {
+		if (this.restartTimer !== null) window.clearTimeout(this.restartTimer);
+		this.restartTimer = window.setTimeout(() => {
+			this.restartTimer = null;
+			this.feedRoot = this.settings.projectRoot;
+			this.seen.clear();
+			void this.feed.start().then(() => this.onRebuild("settings"));
+		}, delayMs);
 	}
 
 	/** Open (or reveal) the Beads pane in the right sidebar. */
@@ -182,15 +237,102 @@ export default class BeadsPlugin extends Plugin {
 		await workspace.revealLeaf(leaf);
 	}
 
-	/** Refresh every open Beads pane, and the status-bar ready count. */
+	private panes(): BeadsView[] {
+		return this.app.workspace
+			.getLeavesOfType(VIEW_TYPE_BEADS)
+			.map((l) => l.view)
+			.filter((v): v is BeadsView => v instanceof BeadsView);
+	}
+
+	private editors(): BeadEditorView[] {
+		return this.app.workspace
+			.getLeavesOfType(VIEW_TYPE_BEADS_EDITOR)
+			.map((l) => l.view)
+			.filter((v): v is BeadEditorView => v instanceof BeadEditorView);
+	}
+
+	/** Re-read every open Beads pane and the counts (manual refresh, own writes). */
 	refreshViews(): void {
-		for (const leaf of this.app.workspace.getLeavesOfType(
-			VIEW_TYPE_BEADS,
-		)) {
-			const view = leaf.view;
-			if (view instanceof BeadsView) void view.refresh();
+		invalidateReadCache();
+		for (const view of this.panes()) void view.refresh();
+		this.scheduleCounts(0);
+	}
+
+	/** Journal records: patch what is on screen instead of re-listing. */
+	private onRecords(recs: JournalRecord[]): void {
+		for (const view of this.panes()) view.applyRecords(recs);
+		let recount = false;
+		for (const r of recs) recount = affectsCounts(r, this.seen) || recount;
+		if (recount) this.scheduleCounts();
+		const ids = new Set(recs.map((r) => r.issue_id));
+		for (const ed of this.editors()) ed.onExternalChange(ids);
+		this.scheduleEmbeds();
+	}
+
+	private onRebuild(reason: string): void {
+		this.seen.clear();
+		this.refreshViews();
+		// Embeds never re-read on a timer (many blocks × a timer is a process
+		// storm); editors follow real changes only.
+		if (reason === "timer") return;
+		this.scheduleEmbeds();
+		if (reason !== "change") {
+			for (const ed of this.editors()) ed.onExternalChange(null);
 		}
-		this.updateStatusBar();
+	}
+
+	private onFeedStatus(st: FeedStatus): void {
+		for (const view of this.panes()) view.onFeedStatus(st);
+		this.renderStatusBar();
+	}
+
+	/** Coalesce count refreshes: one read per burst of changes. */
+	scheduleCounts(delayMs = 300): void {
+		if (this.countsTimer !== null) window.clearTimeout(this.countsTimer);
+		this.countsTimer = window.setTimeout(() => {
+			this.countsTimer = null;
+			void this.loadCounts();
+		}, delayMs);
+	}
+
+	private async loadCounts(): Promise<void> {
+		if (this.countsInFlight) {
+			this.countsAgain = true;
+			return;
+		}
+		const opts = this.bdOptions();
+		if (!opts) {
+			this.readyCount = null;
+			this.countsError = "";
+			this.renderStatusBar();
+			return;
+		}
+		this.countsInFlight = true;
+		try {
+			this.readyCount = await bdReadyCount(opts);
+			this.countsError = "";
+		} catch (e) {
+			this.readyCount = null;
+			this.countsError = (e as Error).message;
+		} finally {
+			this.countsInFlight = false;
+		}
+		this.renderStatusBar();
+		// Each pane re-reads its own filtered tab counts.
+		for (const view of this.panes()) view.onCounts();
+		if (this.countsAgain) {
+			this.countsAgain = false;
+			void this.loadCounts();
+		}
+	}
+
+	/** Re-render on-screen `beads` code blocks, at most twice a second. */
+	private scheduleEmbeds(): void {
+		if (this.embeds.size === 0 || this.embedTimer !== null) return;
+		this.embedTimer = window.setTimeout(() => {
+			this.embedTimer = null;
+			for (const render of this.embeds) render();
+		}, 500);
 	}
 
 	/**
@@ -211,81 +353,23 @@ export default class BeadsPlugin extends Plugin {
 	}
 
 	/** Ambient "● N ready" in the status bar (works even with the pane closed). */
-	updateStatusBar(): void {
-		if (!this.statusBarEl) return;
-		const s = this.settings;
-		if (!s.projectRoot) {
-			this.statusBarEl.setText("");
-			return;
-		}
-		// Drop stale results: only the latest request may write the count.
-		const my = ++this.statusSeq;
-		void bdReadyCount({ bdPath: s.bdPath, cwd: s.projectRoot })
-			.then((n) => {
-				if (my === this.statusSeq) this.statusBarEl?.setText(`● ${n} ready`);
-			})
-			.catch(() => {
-				if (my === this.statusSeq) this.statusBarEl?.setText("");
-			});
-	}
-
-	restartRefreshTimer(): void {
-		if (this.refreshTimer !== null) {
-			window.clearInterval(this.refreshTimer);
-			this.refreshTimer = null;
-		}
-		const secs = this.settings.refreshIntervalSec;
-		if (secs > 0) {
-			this.refreshTimer = window.setInterval(
-				() => this.refreshViews(),
-				secs * 1000,
-			);
-			this.registerInterval(this.refreshTimer);
-		}
-	}
-
-	/** Watch the `.beads` directory so external `bd` writes refresh the pane. */
-	restartWatch(): void {
-		const root = this.settings.projectRoot;
-		if (root === this.watchedRoot && this.watcher) return;
-		this.stopWatch();
-		this.watchedRoot = root;
-		if (!root) return;
-		const beadsDir = join(root, ".beads");
-		try {
-			this.watcher = watch(
-				beadsDir,
-				{ persistent: false, recursive: false },
-				() => this.onBeadsChanged(),
-			);
-			this.watcher.on("error", () => this.stopWatch());
-		} catch {
-			// .beads may not exist yet; a later refresh/settings change retries.
-			this.watcher = null;
-		}
-	}
-
-	private onBeadsChanged(): void {
-		if (this.watchDebounce !== null) {
-			window.clearTimeout(this.watchDebounce);
-		}
-		this.watchDebounce = window.setTimeout(() => {
-			this.watchDebounce = null;
-			// An external bd write changed the DB — drop cached embed reads so
-			// code blocks re-render fresh, not from the stale TTL cache.
-			invalidateReadCache();
-			this.refreshViews();
-		}, 400);
-	}
-
-	private stopWatch(): void {
-		if (this.watcher) {
-			this.watcher.close();
-			this.watcher = null;
-		}
-		if (this.watchDebounce !== null) {
-			window.clearTimeout(this.watchDebounce);
-			this.watchDebounce = null;
-		}
+	private renderStatusBar(): void {
+		const el = this.statusBarEl;
+		if (!el) return;
+		const n = this.readyCount;
+		el.setText(
+			this.countsError ? "● bd error" : typeof n === "number" ? `● ${n} ready` : "",
+		);
+		el.toggleClass("is-error", !!this.countsError);
+		const st = this.feed?.current;
+		el.setAttribute(
+			"aria-label",
+			this.countsError
+				? `Beads: ${this.countsError}`
+				: st?.mode === "journal"
+					? "Beads: live"
+					: `Beads: ${st?.detail ?? ""}`,
+		);
+		el.toggleClass("is-live", st?.mode === "journal");
 	}
 }

@@ -1,4 +1,12 @@
-import { ItemView, ViewStateResult, WorkspaceLeaf, setIcon } from "obsidian";
+import {
+	ItemView,
+	Modal,
+	Notice,
+	Setting,
+	ViewStateResult,
+	WorkspaceLeaf,
+	setIcon,
+} from "obsidian";
 import { existsSync } from "fs";
 import { join } from "path";
 import type BeadsPlugin from "./main";
@@ -8,6 +16,7 @@ import {
 	bdBlocked,
 	bdByStatus,
 	bdCount,
+	bdEnableJournal,
 	bdLabelNames,
 	bdAssigneeNames,
 	bdTypeNames,
@@ -16,6 +25,8 @@ import {
 } from "./bd";
 import { renderIssueRow } from "./row";
 import { AssigneeSuggest } from "./assignee-suggest";
+import { JournalRecord, TabKey, TabList, applyRecord, byPriority } from "./journal";
+import { FeedStatus } from "./feed";
 import {
 	EMPTY_FILTER,
 	NO_ASSIGNEE,
@@ -32,7 +43,7 @@ import {
 } from "./filter";
 
 interface TabDef {
-	key: string;
+	key: TabKey;
 	label: string;
 	countKey: string;
 }
@@ -45,11 +56,8 @@ const TABS: TabDef[] = [
 ];
 const PAGE = 25;
 
-interface TabState {
-	issues: BeadIssue[];
+interface TabState extends TabList {
 	limit: number;
-	hasMore: boolean;
-	loaded: boolean;
 	loading: boolean;
 	error?: string;
 }
@@ -65,15 +73,6 @@ interface PaneState {
 	showFilters?: boolean;
 }
 
-function byPriority(issues: BeadIssue[]): BeadIssue[] {
-	return issues
-		.slice()
-		.sort(
-			(a, b) =>
-				(a.priority ?? 9) - (b.priority ?? 9) || a.id.localeCompare(b.id),
-		);
-}
-
 /**
  * Tabbed, lazily-loaded pane. Only the active tab's list is loaded, and each
  * tab paginates with "Load more" — so opening the pane is fast even with
@@ -82,12 +81,15 @@ function byPriority(issues: BeadIssue[]): BeadIssue[] {
  *
  * Filters (assignee / labels / type) are passed to bd as flags, for the lists
  * and the counts alike. The filter is kept in the view state, so it survives
- * reloads.
+ * reloads. Counts are per-view because they follow this pane's filter; only
+ * the status bar's unfiltered ready count is shared (`plugin.readyCount`).
+ *
+ * With the events journal on, changes are applied to the loaded rows in place;
+ * only a change whose effect bd must compute re-reads the tab.
  */
 export class BeadsView extends ItemView {
-	private active = "ready";
-	private counts: Record<string, number> = {};
-	private tabs: Record<string, TabState> = {};
+	private active: TabKey = "ready";
+	private tabs = {} as Record<TabKey, TabState>;
 	private baseState: "ok" | "no-root" | "no-db" = "no-root";
 	private loadSeq = 0;
 	private filter: PaneFilter = { ...EMPTY_FILTER, labels: [] };
@@ -95,6 +97,13 @@ export class BeadsView extends ItemView {
 	private options: FilterOptions | null = null;
 	private optionsLoading = false;
 	private optionsError: string | null = null;
+	private reloadTimer: number | null = null;
+	/** Records arrived during a read; read once more when it finishes. */
+	private reloadAgain = false;
+	/** Tab counts, from `tabCounts` — this pane's filter, this pane's lists. */
+	private counts: Record<string, number> = {};
+	private countsInFlight = false;
+	private countsAgain = false;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -140,7 +149,46 @@ export class BeadsView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
+		if (this.reloadTimer !== null) window.clearTimeout(this.reloadTimer);
 		for (const t of TABS) this.tabs[t.key] = this.emptyTab();
+	}
+
+	/** Apply journal records to the loaded tabs; re-read only what bd must settle. */
+	applyRecords(recs: JournalRecord[]): void {
+		const stale = new Set<TabKey>();
+		for (const rec of recs) {
+			// The lists were read with this pane's filter as bd flags, so the
+			// same filter has to gate what a record may put back on screen.
+			const inScope = (i: BeadIssue) => matchesFilter(i, this.filter);
+			for (const k of applyRecord(this.tabs, rec, inScope)) stale.add(k);
+		}
+		for (const k of stale) {
+			if (k !== this.active) this.tabs[k].loaded = false;
+		}
+		// A read in flight may predate these records. Don't cancel it (under a
+		// steady stream of writes nothing would ever finish); queue one more.
+		if (this.tabs[this.active].loading) {
+			this.reloadAgain = true;
+		} else if (stale.has(this.active)) {
+			if (this.reloadTimer !== null) window.clearTimeout(this.reloadTimer);
+			this.reloadTimer = window.setTimeout(() => {
+				this.reloadTimer = null;
+				void this.loadTab(this.active);
+			}, 250);
+		}
+		this.render();
+	}
+
+	/**
+	 * The plugin found the counts may have moved. Its own number is unfiltered,
+	 * so this pane re-reads its own, filtered ones.
+	 */
+	onCounts(): void {
+		void this.loadCounts();
+	}
+
+	onFeedStatus(_st: FeedStatus): void {
+		this.render();
 	}
 
 	private resolveOpts(): BdOptions | null {
@@ -168,22 +216,52 @@ export class BeadsView extends ItemView {
 			this.render();
 			return;
 		}
-		const seq = ++this.loadSeq;
+		void this.loadCounts();
+		await this.loadTab(this.active);
+	}
+
+	/**
+	 * The tab counts: each from the same bd command as its tab's list, with
+	 * this pane's filter applied (`tabCounts`). Coalesced like the plugin's
+	 * count read — one in flight, one queued — so a burst of journal records
+	 * can't pile up four bd calls per record.
+	 */
+	private async loadCounts(): Promise<void> {
+		if (this.countsInFlight) {
+			this.countsAgain = true;
+			return;
+		}
+		const opts = this.resolveOpts();
+		if (!opts) {
+			this.counts = {};
+			this.render();
+			return;
+		}
+		// setFilter() swaps in a new object, so identity pins the result to the
+		// filter it was read for; a filter change mid-read discards it.
+		const f = this.filter;
+		this.countsInFlight = true;
 		try {
-			this.counts = await tabCounts(this.filter, {
+			const counts = await tabCounts(f, {
 				ready: (args) => bdReady(opts, 0, args),
 				count: (status, args) => bdCount(opts, status, args),
 				blocked: () => bdBlocked(opts),
 			});
+			if (f === this.filter) this.counts = counts;
 		} catch {
-			this.counts = {}; /* counts are optional chrome */
+			if (f === this.filter) this.counts = {}; /* counts are optional chrome */
+		} finally {
+			this.countsInFlight = false;
 		}
-		if (seq !== this.loadSeq) return;
-		await this.loadTab(this.active, seq);
+		this.render();
+		if (this.countsAgain) {
+			this.countsAgain = false;
+			void this.loadCounts();
+		}
 	}
 
 	private fetchTab(
-		key: string,
+		key: TabKey,
 		opts: BdOptions,
 		limit: number,
 	): Promise<BeadIssue[]> {
@@ -245,13 +323,13 @@ export class BeadsView extends ItemView {
 		}
 	}
 
-	private async loadTab(key: string, seq?: number): Promise<void> {
+	private async loadTab(key: TabKey): Promise<void> {
 		const opts = this.resolveOpts();
 		if (!opts) {
 			this.render();
 			return;
 		}
-		const mySeq = seq ?? ++this.loadSeq;
+		const mySeq = ++this.loadSeq;
 		const tab = this.tabs[key];
 		tab.loading = true;
 		tab.error = undefined;
@@ -275,11 +353,15 @@ export class BeadsView extends ItemView {
 			if (mySeq === this.loadSeq) {
 				tab.loading = false;
 				this.render();
+				if (this.reloadAgain) {
+					this.reloadAgain = false;
+					void this.loadTab(this.active);
+				}
 			}
 		}
 	}
 
-	private async switchTab(key: string): Promise<void> {
+	private async switchTab(key: TabKey): Promise<void> {
 		if (this.active === key) return;
 		this.active = key;
 		if (this.tabs[key].loaded) this.render(); // cached → instant
@@ -306,6 +388,10 @@ export class BeadsView extends ItemView {
 		body: HTMLElement;
 		filterBtn: HTMLButtonElement;
 		refreshBtn: HTMLButtonElement;
+		/** The live/polling dot in the header. */
+		live: HTMLElement;
+		/** Holds the events-journal offer bar, when it's being offered. */
+		offer: HTMLElement;
 	} | null = null;
 	/** What the filter bar was last built from — it's rebuilt only when this changes. */
 	private filterBarKey = "";
@@ -332,6 +418,7 @@ export class BeadsView extends ItemView {
 		shell.filterBtn.setAttr("aria-label", active ? `Filter: ${describeFilter(this.filter)}` : "Filter");
 		shell.filterBtn.toggleClass("is-active", active || this.showFilters);
 		shell.refreshBtn.toggleClass("beads-spin", this.tabs[this.active].loading);
+		this.renderLive(shell.live);
 
 		// Setup problems replace everything below the header.
 		shell.notice.setText(
@@ -344,6 +431,8 @@ export class BeadsView extends ItemView {
 		shell.notice.toggle(!ok);
 		shell.tabBar.toggle(ok);
 		shell.body.toggle(ok);
+		shell.offer.toggle(ok);
+		if (ok) this.renderJournalOffer(shell.offer);
 
 		// Filter bar: rebuilt only when the filter itself (or its visibility)
 		// changes. Choices arriving from bd refill the dropdowns in place.
@@ -374,6 +463,7 @@ export class BeadsView extends ItemView {
 
 		const header = root.createDiv({ cls: "beads-header" });
 		header.createDiv({ cls: "beads-header-title", text: "Beads" });
+		const live = header.createSpan({ cls: "beads-live", attr: { role: "img" } });
 		const actions = header.createDiv({ cls: "beads-header-actions" });
 		const captureBtn = actions.createEl("button", {
 			cls: "clickable-icon",
@@ -391,7 +481,7 @@ export class BeadsView extends ItemView {
 		setIcon(refreshBtn, "refresh-cw");
 		refreshBtn.onclick = () => {
 			if (this.showFilters) void this.loadOptions();
-			void this.refresh();
+			this.plugin.refreshViews();
 		};
 
 		const notice = root.createDiv({ cls: "beads-empty" });
@@ -405,9 +495,10 @@ export class BeadsView extends ItemView {
 			btn.onclick = () => void this.switchTab(t.key);
 			tabs[t.key] = { btn, count };
 		}
+		const offer = root.createDiv({ cls: "beads-offer-slot" });
 		const body = root.createDiv({ cls: "beads-tab-body" });
 
-		this.shell = { notice, filters, tabBar, tabs, body, filterBtn, refreshBtn };
+		this.shell = { notice, filters, tabBar, tabs, body, filterBtn, refreshBtn, live, offer };
 		return this.shell;
 	}
 
@@ -641,6 +732,55 @@ export class BeadsView extends ItemView {
 		const btn = parent.createEl("button", { cls: "beads-filter-clear", text: "Clear" });
 		btn.onclick = () => this.setFilter({ ...EMPTY_FILTER, labels: [] });
 	}
+
+	/**
+	 * A small dot in the header: live (following bd events) or polling.
+	 * Updates the span in place — the header is built once (`ensureShell`).
+	 */
+	private renderLive(dot: HTMLElement): void {
+		const st = this.plugin.feed?.current;
+		dot.toggle(!!st);
+		if (!st) return;
+		const live = st.mode === "journal";
+		const secs = this.plugin.settings.refreshIntervalSec;
+		const polling = secs > 0 ? `Refreshing every ${secs} s` : "Refreshing on changes";
+		dot.toggleClass("is-live", live);
+		dot.setAttribute(
+			"aria-label",
+			live
+				? "Live: following bd events"
+				: `${polling}. ${st.detail.replace(/\.$/, "")}.`,
+		);
+	}
+
+	/**
+	 * Offer the events journal once per vault, in the pane (never a modal at
+	 * startup). Turning it on is a workspace-wide change, so it goes through a
+	 * confirmation that says so.
+	 */
+	private renderJournalOffer(slot: HTMLElement): void {
+		const st = this.plugin.feed?.current;
+		const show =
+			!!st?.journalAvailable &&
+			st.mode !== "journal" &&
+			!this.plugin.settings.journalOfferDismissed;
+		// Rebuilt only when the offer appears or disappears, so the buttons
+		// aren't replaced underneath a click.
+		if (show === (slot.firstElementChild !== null)) return;
+		slot.empty();
+		if (!show) return;
+		const bar = slot.createDiv({ cls: "beads-offer" });
+		bar.createSpan({ text: "Live updates are available with bd's events journal." });
+		const actions = bar.createDiv({ cls: "beads-offer-actions" });
+		const on = actions.createEl("button", { cls: "mod-cta", text: "Turn on…" });
+		on.onclick = () => new JournalModal(this.plugin).open();
+		const no = actions.createEl("button", { text: "Not now" });
+		no.onclick = async () => {
+			this.plugin.settings.journalOfferDismissed = true;
+			await this.plugin.saveSettings();
+			this.render();
+		};
+	}
 }
 
 /** Replace a select's options, keeping `current` selectable even if bd doesn't list it. */
@@ -655,4 +795,55 @@ function setOptions(
 	sel.empty();
 	for (const o of options) sel.createEl("option", { value: o.value, text: o.label });
 	sel.value = current;
+}
+
+/** Explains the workspace-wide effect of the events journal before enabling it. */
+export class JournalModal extends Modal {
+	constructor(private plugin: BeadsPlugin) {
+		super(plugin.app);
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		this.setTitle("Turn on bd's events journal?");
+		contentEl.createEl("p", {
+			text: "The pane will follow bd's change journal and update the moment a bead changes, instead of re-reading everything on a timer.",
+		});
+		const p = contentEl.createEl("p");
+		p.appendText("This runs ");
+		p.createEl("code", { text: "bd config set events-journal true" });
+		p.appendText(", which writes ");
+		p.createEl("code", { text: ".beads/config.yaml" });
+		p.appendText(
+			". From then on every bd command in this workspace records its changes, including other people's and agents' if that file is shared through git. bd keeps the last 7 days or 100,000 records.",
+		);
+		const off = contentEl.createEl("p");
+		off.appendText("Turn it off any time with ");
+		off.createEl("code", { text: "bd config set events-journal false" });
+		off.appendText(".");
+		new Setting(contentEl)
+			.addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()))
+			.addButton((b) =>
+				b
+					.setCta()
+					.setButtonText("Turn on")
+					.onClick(async () => {
+						const opts = this.plugin.bdOptions();
+						if (!opts) return;
+						b.setDisabled(true);
+						try {
+							await bdEnableJournal(opts);
+							new Notice("Beads: events journal on — live updates enabled.");
+							this.plugin.restartFeed(0);
+						} catch (e) {
+							new Notice(`Beads: ${(e as Error).message}`, 8000);
+						}
+						this.close();
+					}),
+			);
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+	}
 }

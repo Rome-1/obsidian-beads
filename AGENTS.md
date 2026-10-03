@@ -33,10 +33,11 @@ issue tracker inside Obsidian. It **shells out to the `bd` CLI**. It never reads
 the Beads database directly.
 
 - **Pane** (`ItemView`): Ready · In progress · Blocked · Closed tabs, each with a live count and paged with **Load more**
-- **Editor tab**: opens a bead like a note, with YAML frontmatter for the fields and a markdown body for the description. Save runs `bd update` with only the changed fields
-- **Quick capture**: `bd create` from a modal or the `+` button
+- **Editor tab**: opens a bead like a note — a title, a Properties panel of typed controls, and markdown text fields (description / design / notes / acceptance). Save runs `bd update` with only the changed fields
+- **New bead**: `bd create` from the same editor, blank (command, or the `+` button)
 - **`beads` code blocks**: live query embeds inside notes (`ready`, `blocked`, `list`, `query: <expr>`, `limit: <n>`)
-- **Status bar** `● N ready`, auto-refresh on a timer, and a `fs.watch` on `.beads/`
+- **Live updates**: with bd >= 1.3.0 and `events-journal: true`, a long-lived `bd events tail --follow` patches rows in place; otherwise `fs.watch` on `.beads/` plus the refresh timer
+- **Status bar** `● N ready` (from `bd ready --limit 0`, never `bd status`)
 
 Upstream: `https://github.com/Rome-1/obsidian-beads` (MIT). User docs: `README.md`.
 
@@ -45,7 +46,7 @@ Upstream: `https://github.com/Rome-1/obsidian-beads` (MIT). User docs: `README.m
 ```
 obsidian-beads/
 ├── src/
-│   ├── main.ts        # Plugin entry: commands, ribbon, status bar, .beads watcher, root auto-detect
+│   ├── main.ts        # Plugin entry: commands, ribbon, status bar, feed wiring, root auto-detect
 │   ├── bd.ts          # ONLY place that spawns bd (execFile + argv, concurrency cap, code-block cache)
 │   ├── view.ts        # The tabbed pane (ItemView, VIEW_TYPE_BEADS)
 │   ├── editor.ts      # Bead editor tab (title, property controls, markdown text fields, deps, comments)
@@ -56,9 +57,11 @@ obsidian-beads/
 │   ├── assignee-suggest.ts # Assignee box popup (AbstractInputSuggest): typed / Unassigned / saved (× to forget) / bd
 │   ├── lineage.ts     # Pure lineage walk (bd dep list up/down, fan-out folding, caps) + dagre layout
 │   ├── lineage-view.ts # Lineage graph ItemView: DOM-built SVG, pan/zoom, click to re-centre / open
+│   ├── feed.ts        # How the plugin learns beads changed: events journal (follow) or fs.watch + timer
+│   ├── journal.ts     # Pure journal logic: parse a record, apply it to the loaded tabs, count relevance
 │   ├── codeblock.ts   # ```beads``` code-block processor
 │   ├── row.ts         # Shared row component (pane + code block render the same row)
-│   ├── settings.ts    # Settings + tab (projectRoot, bdPath, refreshIntervalSec)
+│   ├── settings.ts    # Settings + tab (projectRoot, bdPath, refreshIntervalSec, journalOfferDismissed, assignee lists)
 │   └── types.ts       # BeadIssue shape, issue types, priorities, editable statuses
 ├── tests/             # node --test: unit tests + real-bd integration tests
 ├── styles.css         # Plugin styles (shipped as-is)
@@ -90,7 +93,7 @@ npm run test:coverage  # same, with a per-file coverage table
 
 - **Test layout**: tests live in `tests/*.test.mts` and use `node:test` + `node:assert/strict`. There's no test framework; Node 22.6+ strips TS types natively
 - **Unit tests** cover pure modules only, i.e. modules that never import `obsidian`:
-  - `mdtext.ts`, `editmodel.ts`, `filter.ts`, `lineage.ts` (the walk, the layout and the view geometry)
+  - `mdtext.ts`, `editmodel.ts`, `filter.ts`, `lineage.ts` (the walk, the layout and the view geometry), `journal.ts`
   - `buildUpdateArgs` and the JSON parsers (`parse*`) in `bd.ts`
   - Keep logic testable by moving it into pure modules. The views should only wire DOM to it
 - **Integration tests** (`tests/bd.integration.test.mts`) run the **real `bd`** against a throwaway database in the OS temp dir. They skip when `bd` isn't on `PATH`; set `BD_BIN` to use another binary
@@ -201,7 +204,10 @@ in its `docs/` folder and at https://beads.gascity.com/. Installed here: `bd
 | `bd update <id> --title/--description/--priority/--type/--status/--assignee/--add-label/--remove-label/--claim` | Edit fields (`--claim` sets you as assignee and status `in_progress`) |
 | `bd close <id> --reason "…"` | Close (refused while open blockers remain) |
 | `bd comments <id>` / `bd comments add <id> "text"` | Comment thread |
-| `bd status` | Counts: `summary.{ready_issues, blocked_issues, open_issues, …}`. ⚠️ `ready_issues` undercounts (see Pane filters); the plugin doesn't use it |
+| `bd status` | Counts: `summary.{ready_issues, blocked_issues, open_issues, …}`. ⚠️ `ready_issues` undercounts (see Pane filters); nothing on screen uses it — only the integration suite, to pin that bug |
+| `bd count --status <s> [--assignee/--label/--type/--no-assignee]` | A count with the **same filter flags as `bd list`**. No `--status ready`: ready isn't a stored status, so that silently returns 0 |
+| `bd events tail [--follow] [--since n] [--limit n]` | The change journal (bd >= 1.3.0, `events-journal: true`). `bd config get/set events-journal` reads/writes it for the whole workspace |
+| `bd vc status --json` | The workspace's Dolt commit — the heartbeat for changes the journal never sees |
 | `bd prime` / `bd remember "…"` | Agent workflow context and persistent project memory |
 
 ### JSON shapes the plugin relies on (verified with bd 1.2.2)
@@ -219,17 +225,21 @@ past the v1 kill list (the editor tab, multi-field capture, and markdown
 comments now exist), but these rules still hold:
 
 - **All `bd` calls go through `src/bd.ts`**, using `execFile` with an **argv array**. Never use `exec` or a shell string
+  - **One exception**: `feed.ts` `spawn`s the long-lived `bd events tail --follow`, which can't be an `execFile` round trip. It still passes an argv array; on POSIX the args go to `/bin/sh` as **positional parameters** (never interpolated into the script) so the watchdog can kill bd when Obsidian dies
 - **Data-controlled values** go after a `--` sentinel or in `--flag=value` form, so they can't be read as flags (CWE-88)
 - **Every call is bounded**: a 15 s timeout, a 16 MB buffer, and at most 4 concurrent `bd` processes
 - **Parse bd JSON only through `parseJson` in `bd.ts`**. It unwraps bd's v2 envelope (`{"schema_version", "data"}`), which becomes the default in bd 2.0 and can already be switched on with `BD_JSON_ENVELOPE=1`
   - Never call `JSON.parse` on bd output anywhere else
   - The integration suite runs every call in both formats
+  - ⚠️ `TODO(1)` in `bd.ts` / `journal.ts`: the `bd events tail` line parsing and the truncation payload still use a raw `JSON.parse`. The enveloped shape of a JSONL stream is unverified (it needs bd >= 1.3.0; 1.2.2 is installed), so it was left as-is rather than guessed. `bd vc status --json` **is** confirmed to wrap, and `bdHeadCommit` goes through `parseJson` — an integration test pins it
 - **`bd` computes and the plugin displays.** Ready, Blocked, and In-progress each come from their own `bd` command. There are no local state files and no caches, except the code-block read cache (4 s TTL, one read at a time, limit clamped to 50, cleared on every mutation)
 - **Pane filters** (`filter.ts`) are passed to bd as flags: `bd ready` / `bd list` / `bd count` take `--assignee`, repeated `--label` (AND) and `--type`
   - The unassigned flag is `--unassigned` for `ready` but `--no-assignee` for `list` / `count`
   - **Only exception**: `bd blocked` has no filter flags, so the Blocked tab filters its output with `matchesFilter`. An integration test checks that rule gives the same results as bd's own flags
-  - **Tab counts always come from the same command as the tab's list** (`tabCounts` in `filter.ts`): `bd ready --limit 0`, `bd count --status`, and the length of `bd blocked`. The status bar's ready count does the same
+  - **Tab counts always come from the same command as the tab's list** (`tabCounts` in `filter.ts`): `bd ready --limit 0`, `bd count --status`, and the length of `bd blocked`. The status bar's ready count does the same (`bdReadyCount`)
   - Never use `bd status` for counts: its `ready_issues` is `open − blocked`, and "blocked" also includes blocked *deferred* and *in_progress* beads, so it undercounts (Govini showed 1 ready while `bd ready` listed 4). The integration suite reproduces this
+  - This is why `bd count` is used and `bd status` isn't: `bd count` takes the **same filter flags as the list** (`--assignee`, repeated `--label`, `--type`, `--no-assignee`), so a filtered count can't disagree with the filtered list. `bd status` takes no filter flags at all — it errors on `--assignee`
+  - Counts are **per-pane**, because they follow that pane's filter. Only the status bar's unfiltered ready count is shared on the plugin (`plugin.readyCount`)
   - Dropdown choices load on demand, never on the auto-refresh timer
   - Saved assignee names (`settings.savedAssignees`, at most 50, most recent first) and hidden patterns (`settings.hiddenAssignees`, exact names or `*` globs) are the one exception to the "no local state" rule. They're lists the user curates, stored in the plugin settings, and bd stays the source of truth for assignees
   - Hidden patterns only affect the suggestions. They never stop a typed name from filtering
@@ -237,6 +247,12 @@ comments now exist), but these rules still hold:
   - Only the bead list (`renderBody`) is rebuilt on each load
   - The filter bar is rebuilt only when `filterBarKey` changes (the filter, or the option list loading)
   - Never go back to `contentEl.empty()` on every render: it destroys focus, typed text and open dropdowns
+  - Anything the feed can change must update **in place**, not be built in `ensureShell()`: the live/polling dot (`renderLive`) takes a persistent span, and the events-journal offer (`renderJournalOffer`) a persistent slot that is only rebuilt when the offer appears or disappears
+- **Live updates** (`feed.ts`, `journal.ts`):
+  - The plugin **never** turns the journal on by itself — `bd config set events-journal true` writes `.beads/config.yaml` for every bd user of the workspace, so it goes through the in-pane offer and a confirmation modal
+  - A journal record carries the bead's full new state, so rows are patched with no bd call. Only a membership question bd must compute (is this bead *ready* now?) marks the tab stale and re-reads it
+  - **`applyRecord` must be given the pane's filter** (`inScope`, backed by `matchesFilter`). The lists it patches were read with that filter as bd flags, so without it a record would put a filtered-out bead on screen
+  - Older bd, or the journal off, falls back to `fs.watch` + the refresh timer — the capability check decides, never a setting
 - **Inert text**: titles in the pane render as text, never HTML
 - Description, design, notes, acceptance criteria and comments render only through Obsidian's `MarkdownRenderer`. bd treats all of them as markdown
 - `<…>` outside code is escaped first (`mdtext.ts`), so CLI-style placeholders like `<this-id>` show literally, as they do in `bd show`

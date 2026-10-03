@@ -83,7 +83,11 @@ function rawExec(args: string[], opts: BdOptions): Promise<BdResult> {
 						(err as NodeJS.ErrnoException).code === "ENOENT"
 							? `bd binary not found at "${opts.bdPath}". Set the path in Beads settings.`
 							: `bd ${args[0] ?? ""} failed: ${err.message}`;
-					reject(new BdError(msg, String(stderr), err));
+					// Keep stdout on the cause: some failures (journal
+					// truncation) put their structured payload there.
+					reject(
+						new BdError(msg, String(stderr), Object.assign(err, { stdout: String(stdout) })),
+					);
 					return;
 				}
 				resolve({ stdout: String(stdout), stderr: String(stderr) });
@@ -403,16 +407,6 @@ export async function bdQueryCached(
 
 // --- Mutations (clear the code-block cache) ------------------------------
 
-/** `bd close --reason <reason> -- <id>`. */
-export async function bdClose(
-	opts: BdOptions,
-	id: string,
-	reason: string,
-): Promise<void> {
-	await run(["close", "--reason", reason, "--", id], opts);
-	invalidateReadCache();
-}
-
 export interface BdCreateFields {
 	title: string;
 	type: string;
@@ -526,6 +520,135 @@ export async function bdVersion(opts: BdOptions): Promise<string> {
 	return stdout.trim();
 }
 
+/** `[major, minor, patch]` from `bd --version` output, or null if unparseable. */
+export function parseBdVersion(text: string): [number, number, number] | null {
+	const m = /(\d+)\.(\d+)\.(\d+)/.exec(text);
+	return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+/** True when `v` is at least `min` (both `[major, minor, patch]`). */
+export function versionAtLeast(
+	v: [number, number, number],
+	min: [number, number, number],
+): boolean {
+	for (let i = 0; i < 3; i++) {
+		if (v[i] !== min[i]) return v[i] > min[i];
+	}
+	return true;
+}
+
+// --- Events journal (bd >= 1.3.0) ------------------------------------------
+
+/** `bd config get events-journal` → whether the workspace journal is on. */
+export async function bdJournalEnabled(opts: BdOptions): Promise<boolean> {
+	const { stdout } = await run(["config", "get", "events-journal"], opts);
+	return stdout.trim() === "true";
+}
+
+/**
+ * `bd config set events-journal true`. This writes `.beads/config.yaml`, so it
+ * turns the journal on for EVERY bd user of the workspace — only call it after
+ * the user has explicitly agreed.
+ */
+export async function bdEnableJournal(opts: BdOptions): Promise<void> {
+	await run(["config", "set", "events-journal", "true"], opts);
+}
+
+/**
+ * The Dolt commit the workspace is on (`bd vc status --json`). Changes that
+ * bypass the journal (`bd dolt pull`, `bd sql`, a clone switch) still move it,
+ * so it is the cheap signal for "rebuild from current state".
+ */
+export async function bdHeadCommit(opts: BdOptions): Promise<string> {
+	const { stdout } = await run(["vc", "status", "--json"], opts);
+	try {
+		const d = parseJson(stdout, "vc status") as { commit?: string } | null;
+		return d?.commit ?? "";
+	} catch {
+		return "";
+	}
+}
+
+/** Result of reading one record past a checkpoint. */
+export type JournalProbe =
+	| { kind: "record"; seq: number }
+	| { kind: "none" }
+	| { kind: "truncated"; head: number };
+
+/**
+ * Read the journal after `since` (up to `limit` records) and report the
+ * highest seq returned. A checkpoint below the retained window fails with
+ * `events_journal_truncated`, whose payload names the head.
+ */
+async function readJournalAfter(
+	opts: BdOptions,
+	since: number,
+	limit: number,
+): Promise<JournalProbe> {
+	let stdout: string;
+	try {
+		({ stdout } = await run(
+			["events", "tail", "--json", "--since", String(since), "--limit", String(limit)],
+			opts,
+		));
+	} catch (e) {
+		// Exit 1 with the truncation payload on stdout (pretty-printed JSON).
+		const cause = e instanceof BdError ? (e.cause as { stdout?: unknown }) : undefined;
+		const out = typeof cause?.stdout === "string" ? cause.stdout : "";
+		try {
+			const d = JSON.parse(out) as { code?: string; head?: number };
+			if (d.code === "events_journal_truncated" && typeof d.head === "number") {
+				return { kind: "truncated", head: d.head };
+			}
+		} catch {
+			/* not the truncation payload */
+		}
+		throw e;
+	}
+	// TODO(1): these two parses bypass `parseJson`, so they don't unwrap bd's v2
+	// envelope (BD_JSON_ENVELOPE=1, the default in bd 2.0). `bd events` needs
+	// bd >= 1.3.0, which isn't installed here, so the enveloped shape of a JSONL
+	// stream and of the truncation payload is unverified — fix once it can be
+	// checked against a real binary instead of guessed. Same for `parseRecord`
+	// in journal.ts. (`bd vc status --json` is already confirmed to wrap, so
+	// `bdHeadCommit` goes through `parseJson`.)
+	const lines = stdout.trim().split("\n").filter((l) => l.startsWith("{"));
+	if (lines.length === 0) return { kind: "none" };
+	const last = JSON.parse(lines[lines.length - 1]) as { seq?: number };
+	return typeof last.seq === "number" ? { kind: "record", seq: last.seq } : { kind: "none" };
+}
+
+/**
+ * The highest journal seq, without reading the whole journal (it can hold
+ * 100k+ records). bd has no "head" query, so gallop with one-record probes
+ * until one comes back empty, bisect down to a small window, then read that
+ * window. About 2·log2(head / 2048) cheap calls, run once per (re)start.
+ */
+export async function bdJournalHead(opts: BdOptions): Promise<number> {
+	const WINDOW = 2048;
+	const first = await readJournalAfter(opts, 0, 1);
+	if (first.kind === "truncated") return first.head;
+	if (first.kind === "none") return 0;
+	let lo = first.seq; // a seq known to exist
+	let hi = 0; // a checkpoint known to have nothing after it
+	for (let s = Math.max(WINDOW, lo); !hi; s *= 2) {
+		const p = await readJournalAfter(opts, s, 1);
+		if (p.kind === "truncated") return p.head;
+		if (p.kind === "none") hi = s;
+		else lo = p.seq;
+	}
+	while (hi - lo > WINDOW) {
+		const mid = Math.floor((lo + hi) / 2);
+		const p = await readJournalAfter(opts, mid, 1);
+		if (p.kind === "truncated") return p.head;
+		if (p.kind === "none") hi = mid;
+		else lo = p.seq;
+	}
+	const tail = await readJournalAfter(opts, lo - 1, hi - lo + 1);
+	if (tail.kind === "truncated") return tail.head;
+	return tail.kind === "record" ? tail.seq : lo;
+}
+
 /**
  * Ready-issue count (for the status bar): the length of `bd ready --limit 0`,
  * so it matches the Ready tab. Not `bd status`'s ready_issues, which
@@ -533,4 +656,24 @@ export async function bdVersion(opts: BdOptions): Promise<string> {
  */
 export async function bdReadyCount(opts: BdOptions): Promise<number> {
 	return (await bdReady(opts, 0)).length;
+}
+
+/**
+ * The `summary` block of `bd status --json` — per-status counts in one cheap
+ * call (keys like `ready_issues`, `blocked_issues`, `closed_issues`, ...).
+ *
+ * ⚠️ Not for the pane or the status bar: `ready_issues` is `open - blocked`,
+ * and "blocked" also counts blocked *deferred* and *in_progress* beads that
+ * were never in `open`, so it undercounts. Use `bdReadyCount` / `tabCounts`.
+ * Kept because it is the only one-call source of stored-status totals, and
+ * the integration suite uses it to pin the bd behaviour we work around.
+ */
+export async function bdStatusCounts(
+	opts: BdOptions,
+): Promise<Record<string, number>> {
+	const { stdout } = await run(["status", "--json"], opts);
+	const d = parseJson(stdout, "status") as {
+		summary?: Record<string, number>;
+	} | null;
+	return d?.summary ?? {};
 }

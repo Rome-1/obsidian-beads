@@ -21,9 +21,11 @@ import {
 	bdCreate,
 	bdDepList,
 	bdLabelNames,
+	bdHeadCommit,
 	bdReady,
 	bdShow,
 	bdReadyCount,
+	bdStatusCounts,
 	bdTypeNames,
 	bdUpdate,
 	type BdOptions,
@@ -268,8 +270,7 @@ test("tab counts equal list lengths, even with a blocked deferred bead (bd statu
 	bd("dep", "add", deferred, blocker);
 	bd("update", deferred, "--status=deferred");
 
-	const statusReady = (JSON.parse(bd("status", "--json")) as { summary: { ready_issues: number } }).summary
-		.ready_issues;
+	const statusReady = (await bdStatusCounts(opts)).ready_issues ?? 0;
 	const readyList = await bdReady(opts, 0);
 	// Pin the bd behaviour this change works around (update if bd fixes it).
 	assert.ok(statusReady < readyList.length, `bd status ready=${statusReady}, bd ready lists ${readyList.length}`);
@@ -300,4 +301,34 @@ test("tab counts equal list lengths, even with a blocked deferred bead (bd statu
 	}
 	// The status bar agrees with the Ready tab.
 	assert.equal(await bdReadyCount(opts), readyList.length);
+});
+
+// --- the events feed's own bd calls (bd >= 1.3.0 for the journal) -----------
+
+test("bdHeadCommit reads the Dolt commit in both JSON formats", { skip }, async () => {
+	const legacy = await bdHeadCommit(opts);
+	assert.match(legacy, /^[a-z0-9]+$/, "a Dolt commit hash");
+
+	// `bd vc status --json` wraps its payload under BD_JSON_ENVELOPE=1, so a
+	// raw JSON.parse(stdout).commit would read undefined and the feed's
+	// heartbeat would never notice a sync. parseJson unwraps it.
+	const prev = process.env.BD_JSON_ENVELOPE;
+	process.env.BD_JSON_ENVELOPE = "1";
+	try {
+		assert.ok("data" in (JSON.parse(bd("vc", "status", "--json")) as object), "envelope is really on");
+		assert.equal(await bdHeadCommit(opts), legacy);
+	} finally {
+		if (prev === undefined) delete process.env.BD_JSON_ENVELOPE;
+		else process.env.BD_JSON_ENVELOPE = prev;
+	}
+});
+
+test("bdHeadCommit moves when the workspace commits, so the heartbeat can see syncs", { skip }, async () => {
+	const before = await bdHeadCommit(opts);
+	await create("head-commit probe");
+	const after = await bdHeadCommit(opts);
+	// Embedded bd may defer the commit; either it moved, or it is stable and
+	// readable. A silently empty string would break the heartbeat, so reject it.
+	assert.notEqual(after, "", "an empty commit would make every heartbeat look unchanged");
+	assert.ok(typeof before === "string" && typeof after === "string");
 });

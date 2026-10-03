@@ -1,3 +1,4 @@
+import { MarkdownRenderChild } from "obsidian";
 import type BeadsPlugin from "./main";
 import { BeadIssue } from "./types";
 import {
@@ -106,11 +107,12 @@ function fetchForConfig(
  *
  * Process-storm defenses (many blocks × re-renders): reads go through the
  * shared concurrency cap + TTL cache in bd.ts, limits are clamped there, and a
- * block only re-fetches on note re-render or after a close it initiated — never
- * on a timer.
+ * block re-fetches only on note re-render or when beads actually change (a
+ * journal record or a `.beads` write, coalesced by the plugin) — never on a
+ * timer. Blocks register while on screen and unregister when unloaded.
  */
 export function registerBeadsCodeBlock(plugin: BeadsPlugin): void {
-	plugin.registerMarkdownCodeBlockProcessor("beads", async (src, el) => {
+	plugin.registerMarkdownCodeBlockProcessor("beads", async (src, el, ctx) => {
 		el.addClass("beads-embed");
 		const parsed = parseBlockConfig(src);
 		if ("error" in parsed) {
@@ -119,18 +121,19 @@ export function registerBeadsCodeBlock(plugin: BeadsPlugin): void {
 		}
 		const cfg = parsed.config;
 
-		const s = plugin.settings;
-		if (!s.projectRoot) {
+		if (!plugin.settings.projectRoot) {
 			el.createDiv({
 				cls: "beads-embed-error",
 				text: "Beads: no project root set (Settings → Beads).",
 			});
 			return;
 		}
-		const opts: BdOptions = { bdPath: s.bdPath, cwd: s.projectRoot };
 		const list = el.createDiv({ cls: "beads-embed-list" });
 
 		const render = async (): Promise<void> => {
+			// Read settings on every render: a live block outlives a settings change.
+			const s = plugin.settings;
+			const opts: BdOptions = { bdPath: s.bdPath, cwd: s.projectRoot };
 			try {
 				const issues = await fetchForConfig(cfg, opts);
 				list.empty();
@@ -152,6 +155,12 @@ export function registerBeadsCodeBlock(plugin: BeadsPlugin): void {
 				});
 			}
 		};
+
+		const live = new MarkdownRenderChild(el);
+		const rerender = () => void render();
+		live.onload = () => plugin.embeds.add(rerender);
+		live.onunload = () => plugin.embeds.delete(rerender);
+		ctx.addChild(live);
 
 		await render();
 	});

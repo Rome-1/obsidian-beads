@@ -1,6 +1,6 @@
 {
   "name": "obsidian-beads",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "A live, clickable pane for the Beads (bd) issue tracker inside Obsidian. Desktop only.",
   "main": "main.js",
   "scripts": {
