@@ -2,7 +2,6 @@ import {
 	ItemView,
 	WorkspaceLeaf,
 	Notice,
-	MarkdownRenderer,
 	ViewStateResult,
 	setIcon,
 } from "obsidian";
@@ -28,6 +27,7 @@ import {
 	modelFromIssue,
 	modelsEqual,
 } from "./editmodel";
+import { renderUntrustedMarkdown } from "./untrusted";
 import {
 	bdShow,
 	bdUpdate,
@@ -632,7 +632,7 @@ export class BeadEditorView extends ItemView {
 				head.createSpan({ cls: "beads-comment-date", text: c.created_at });
 			}
 			const bodyEl = card.createDiv({ cls: "beads-comment-body" });
-			await MarkdownRenderer.render(this.app, c.text ?? "", bodyEl, "", this);
+			await renderUntrustedMarkdown(this.app, c.text ?? "", bodyEl, this);
 		}
 	}
 }
