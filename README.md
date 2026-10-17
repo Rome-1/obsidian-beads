@@ -47,12 +47,15 @@ who tracks work in `bd` and lives in Obsidian.
 - 📄 **Live `beads` code blocks** — embed a query in any note (Dataview-style) and get
   the same clickable rows inline. See [Embedding queries](#embedding-queries-in-notes).
 - 🔢 **Status-bar count** — an ambient `● N ready` even when the pane is closed.
+- 🗃️ **Multiple projects** — keep several `bd` workspaces and switch between them with
+  *Beads: Switch project* or the dropdown in the pane header. See
+  [Multiple projects](#multiple-projects).
 - 🟢 **Live updates** — with Beads 1.3's events journal on, the pane follows `bd`'s own
   change feed and updates the moment a bead changes, from any terminal or agent. Without
   it, the pane refreshes on an interval and whenever `.beads/` changes on disk. See
   [Live updates](#live-updates).
-- ⚙️ **Near-zero setup** — if your vault folder itself contains a `.beads/`, the
-  project root auto-fills on first load.
+- ⚙️ **Near-zero setup** — if your vault folder itself contains a `.beads/` and no
+  project is set, it is added as your first project on load.
 
 ## Requirements
 
@@ -76,9 +79,9 @@ Settings → Community plugins → Browse → search **"Beads"** → Install →
 
 ## Usage
 
-1. Open **Settings → Beads** and set **Project root** to a directory that contains a
-   `.beads/` database (auto-filled if your vault folder has one). Click **Test
-   connection** to confirm `bd` is reachable.
+1. Open **Settings → Beads**, click **Add project**, and set its path to a directory
+   that contains a `.beads/` database (added for you if your vault folder has one).
+   Click the project's **Test** to confirm `bd` is reachable.
 2. Open the pane: click the **list-checks** ribbon icon, or run **"Beads: Open pane"**
    from the command palette. Switch tabs (Ready / In progress / Blocked /
    Closed) and use **Load more** to page through long lists.
@@ -88,6 +91,19 @@ Settings → Community plugins → Browse → search **"Beads"** → Install →
    Dependencies and the comment thread show below.
 4. Add new work anytime with **"Beads: New bead"** (bind it to a hotkey) or the `+` in
    the pane header.
+
+## Multiple projects
+
+Each project is a name and a directory containing `.beads/`. Add, rename, and remove
+them under **Settings → Beads → Projects**; names must be unique. One project is
+**active** at a time: the pane, its filters and counts, the status bar, and live updates
+all follow it. Switch with **Active project** in settings, *Beads: Switch project*, or
+the dropdown that appears in the pane header once you have two or more projects. With
+more than one, the status bar names the active project.
+
+A bead editor or lineage tab stays with the project it was opened from, so switching
+doesn't change what an open tab shows. Such a tab updates live only while its project
+is the active one.
 
 ## Embedding queries in notes
 
@@ -116,10 +132,12 @@ Accepted directives:
 | `list` | All open issues (`bd list`). |
 | `query: <expr>` | A [bd query](https://github.com/gastownhall/beads) expression, e.g. `status=open AND priority<=1`. |
 | `limit: <n>` | Max rows (clamped to 50). |
+| `project: <name>` | Read from this project instead of the active one. An unknown name is an error. |
 
 Embeds re-run when the note renders and when beads change (coalesced to at most twice a
 second) — never on a timer — and share a global read cache, so many blocks won't hammer
-`bd`.
+`bd`. Live changes come from the active project, so a block pinned to another project
+with `project:` re-runs only when the note renders.
 
 ## Live updates
 
@@ -166,7 +184,8 @@ local reader, it is still in preview, and today it refuses the default embedded 
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| Project root | *(empty)* | Absolute path to the directory containing `.beads/`. |
+| Active project | *(first project)* | The project the pane, status bar, and live updates follow. |
+| Projects | *(empty)* | A name and an absolute path to the directory containing `.beads/`, for each `bd` workspace. **Test** runs `bd --version` there. |
 | `bd` binary path | `bd` | Path to the `bd` executable. If not found, use the full path from `which bd` (see Troubleshooting). |
 | Auto-refresh interval | `30` | Seconds between refreshes (`0` disables). With live updates on, how often to check for changes the journal can't see, such as a sync. |
 | Live updates | — | Shows whether the pane is following the events journal, and offers to turn it on. |
@@ -174,11 +193,11 @@ local reader, it is still in preview, and today it refuses the default embedded 
 
 ## Troubleshooting
 
-- **"bd binary not found" / the pane is empty and *Test connection* fails.** GUI-launched
+- **"bd binary not found" / the pane is empty and a project's *Test* fails.** GUI-launched
   apps often don't inherit your shell `PATH`, so the default `bd` can't be resolved. Run
   `which bd` in a terminal and paste the full path into **Settings → Beads → bd binary
   path**.
-- **"No bd database here."** The project root must be a directory that contains a
+- **"No bd database here."** A project's path must be a directory that contains a
   `.beads/` folder. Point it at your `bd` project (not necessarily your vault).
 - **`bd` won't close a blocked issue.** It won't close an issue that still has open
   blockers; the error is shown as a notice. Close its blockers first (the editor tab
@@ -188,11 +207,11 @@ local reader, it is still in preview, and today it refuses the default embedded 
   the dot beside the pane title to see which mode it is in and why. With bd 1.3.0+, turn
   on [live updates](#live-updates).
 - **The status bar says "● bd error".** `bd` failed (not found, or the store is broken).
-  Hover it for the message, and use **Test connection** in settings.
+  Hover it for the message, and use the project's **Test** in settings.
 
 ## Security
 
-- The plugin runs the `bd` binary you configure, in the project root you configure —
+- The plugin runs the `bd` binary you configure, in the project directories you configure —
   the same trust model as the [Shell commands
   plugin](https://github.com/Taitava/obsidian-shellcommands). Point it only at a `bd`
   you trust.
@@ -204,7 +223,7 @@ local reader, it is still in preview, and today it refuses the default embedded 
   render through Obsidian's own `MarkdownRenderer` — the same sanitized path as any note.
   Data-controlled values are also passed after a `--` sentinel (or as `--flag=value`) so
   they can't be reparsed as `bd` flags.
-- The plugin runs `bd` against whatever `.beads/` your project root points at (including
+- The plugin runs `bd` against whatever `.beads/` your projects point at (including
   an auto-detected vault-local one). It never executes anything *from* the dataset — but
   that means you trust `bd`'s own parsing of that database, as with any `bd` invocation.
 
