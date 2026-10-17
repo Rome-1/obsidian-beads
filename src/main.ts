@@ -1,4 +1,4 @@
-import { FileSystemAdapter, Plugin, WorkspaceLeaf } from "obsidian";
+import { App, FileSystemAdapter, Plugin, SuggestModal, WorkspaceLeaf } from "obsidian";
 import { existsSync } from "fs";
 import { join } from "path";
 import {
@@ -19,6 +19,7 @@ import { registerBeadsCodeBlock } from "./codeblock";
 import { BeadsFeed, FeedStatus } from "./feed";
 import { JournalRecord, affectsCounts } from "./journal";
 import { parsePatterns, parseSavedAssignees } from "./filter";
+import { BeadsProject, migrateProjects, projectFor } from "./projects";
 
 export default class BeadsPlugin extends Plugin {
 	settings!: BeadsSettings;
@@ -97,6 +98,16 @@ export default class BeadsPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: "switch-project",
+			name: "Switch project",
+			checkCallback: (checking) => {
+				if (this.settings.projects.length < 2) return false;
+				if (!checking) new ProjectSuggestModal(this.app, this).open();
+				return true;
+			},
+		});
+
+		this.addCommand({
 			id: "refresh",
 			name: "Refresh pane",
 			callback: () => this.refreshViews(),
@@ -116,7 +127,7 @@ export default class BeadsPlugin extends Plugin {
 			onRebuild: (reason) => this.onRebuild(reason),
 			onStatus: (st) => this.onFeedStatus(st),
 		});
-		this.feedRoot = this.settings.projectRoot;
+		this.feedRoot = this.activeRoot();
 		// The pane may read before the follower's checkpoint is set; a write in
 		// that gap would be missed, so rebuild once the feed is running.
 		void this.feed.start().then(() => this.onRebuild("start"));
@@ -132,24 +143,67 @@ export default class BeadsPlugin extends Plugin {
 		}
 	}
 
-	/** Options for a bd call, or null when no usable project root is set. */
-	bdOptions(): BdOptions | null {
-		const s = this.settings;
-		if (!s.projectRoot || !existsSync(join(s.projectRoot, ".beads"))) return null;
-		return { bdPath: s.bdPath, cwd: s.projectRoot };
+	/** A project by name, or the active one when no name is given; null if there is none. */
+	project(name?: string): BeadsProject | null {
+		const want = name ?? this.settings.activeProject;
+		return this.settings.projects.find((p) => p.name === want) ?? null;
+	}
+
+	/** The active project's root ("" when there is none). */
+	activeRoot(): string {
+		return this.project()?.path ?? "";
+	}
+
+	/**
+	 * Options for a bd call in a project (default: the active one), or null
+	 * when it has no usable root.
+	 */
+	bdOptions(name?: string): BdOptions | null {
+		const root = this.project(name)?.path;
+		if (!root || !existsSync(join(root, ".beads"))) return null;
+		return { bdPath: this.settings.bdPath, cwd: root };
 	}
 
 	async loadSettings(): Promise<void> {
-		const data = (await this.loadData()) as Partial<BeadsSettings> | null;
-		this.settings = { ...DEFAULT_SETTINGS, ...(data ?? {}) };
+		const data = ((await this.loadData()) ?? {}) as Partial<BeadsSettings> & {
+			projectRoot?: unknown;
+		};
+		this.settings = { ...DEFAULT_SETTINGS, ...data, ...migrateProjects(data) };
 		this.settings.savedAssignees = parseSavedAssignees(this.settings.savedAssignees);
 		this.settings.hiddenAssignees = parsePatterns(this.settings.hiddenAssignees);
+		// Drop the single-root setting once it lives in the project list.
+		if ("projectRoot" in this.settings) {
+			delete (this.settings as { projectRoot?: unknown }).projectRoot;
+			await this.saveData(this.settings);
+		}
 	}
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
 		// A new root is a different workspace (and journal): start over.
-		if (this.settings.projectRoot !== this.feedRoot) this.restartFeed();
+		if (this.activeRoot() !== this.feedRoot) this.restartFeed();
+		for (const view of this.panes()) view.onProjectsChange();
+		this.renderStatusBar();
+	}
+
+	/**
+	 * Make `name` the active project: the feed, status bar, and panes follow
+	 * it at once. Editors and lineage views keep the project they were opened in.
+	 */
+	async setActiveProject(name: string): Promise<void> {
+		if (!this.project(name) || name === this.settings.activeProject) return;
+		this.settings.activeProject = name;
+		this.readyCount = null;
+		this.countsError = "";
+		await this.saveData(this.settings);
+		for (const view of this.panes()) view.onProjectsChange();
+		this.renderStatusBar();
+		this.restartFeed(0);
+	}
+
+	/** A project was renamed in settings: open editors and lineage views follow it. */
+	renameProject(from: string, to: string): void {
+		for (const v of [...this.editors(), ...this.lineages()]) v.renameProject(from, to);
 	}
 
 	/**
@@ -160,7 +214,7 @@ export default class BeadsPlugin extends Plugin {
 		if (this.restartTimer !== null) window.clearTimeout(this.restartTimer);
 		this.restartTimer = window.setTimeout(() => {
 			this.restartTimer = null;
-			this.feedRoot = this.settings.projectRoot;
+			this.feedRoot = this.activeRoot();
 			this.seen.clear();
 			void this.feed.start().then(() => this.onRebuild("settings"));
 		}, delayMs);
@@ -188,11 +242,11 @@ export default class BeadsPlugin extends Plugin {
 	 * note). If an editor for the same bead is already open, reveal it instead
 	 * of stacking another tab.
 	 */
-	async openBead(id: string): Promise<void> {
+	async openBead(id: string, project = this.settings.activeProject): Promise<void> {
 		const { workspace } = this.app;
 		for (const leaf of workspace.getLeavesOfType(VIEW_TYPE_BEADS_EDITOR)) {
-			const state = leaf.getViewState().state as { id?: string } | undefined;
-			if (state?.id === id) {
+			const state = leaf.getViewState().state as { id?: string; project?: string } | undefined;
+			if (state?.id === id && (state.project ?? this.settings.activeProject) === project) {
 				await workspace.revealLeaf(leaf);
 				return;
 			}
@@ -201,7 +255,7 @@ export default class BeadsPlugin extends Plugin {
 		await leaf.setViewState({
 			type: VIEW_TYPE_BEADS_EDITOR,
 			active: true,
-			state: { id },
+			state: { id, project },
 		});
 		await workspace.revealLeaf(leaf);
 	}
@@ -211,7 +265,7 @@ export default class BeadsPlugin extends Plugin {
 	 * so Back returns to the previous bead); otherwise opens one in a split
 	 * beside the current tab.
 	 */
-	async openLineage(id: string): Promise<void> {
+	async openLineage(id: string, project = this.settings.activeProject): Promise<void> {
 		const { workspace } = this.app;
 		// setViewState (not view.focus) so a deferred, not-yet-loaded tab works
 		// too; the view's setState re-centres and records Back history.
@@ -221,7 +275,7 @@ export default class BeadsPlugin extends Plugin {
 		await leaf.setViewState({
 			type: VIEW_TYPE_BEADS_LINEAGE,
 			active: true,
-			state: { id },
+			state: { id, project },
 		});
 		await workspace.revealLeaf(leaf);
 	}
@@ -233,7 +287,7 @@ export default class BeadsPlugin extends Plugin {
 		await leaf.setViewState({
 			type: VIEW_TYPE_BEADS_EDITOR,
 			active: true,
-			state: { create: true },
+			state: { create: true, project: this.settings.activeProject },
 		});
 		await workspace.revealLeaf(leaf);
 	}
@@ -250,6 +304,13 @@ export default class BeadsPlugin extends Plugin {
 			.getLeavesOfType(VIEW_TYPE_BEADS_EDITOR)
 			.map((l) => l.view)
 			.filter((v): v is BeadEditorView => v instanceof BeadEditorView);
+	}
+
+	private lineages(): BeadLineageView[] {
+		return this.app.workspace
+			.getLeavesOfType(VIEW_TYPE_BEADS_LINEAGE)
+			.map((l) => l.view)
+			.filter((v): v is BeadLineageView => v instanceof BeadLineageView);
 	}
 
 	/** Re-read every open Beads pane and the counts (manual refresh, own writes). */
@@ -351,18 +412,19 @@ export default class BeadsPlugin extends Plugin {
 	}
 
 	/**
-	 * Auto-fill the project root on first load: if it's unset and the vault
-	 * folder itself contains a `.beads/`, use that. Never overwrite a root the
-	 * user set by hand.
+	 * Auto-fill a project on first load: if there are none and the vault folder
+	 * itself contains a `.beads/`, add it. Never touches a list the user made.
 	 */
 	private detectRoot(): void {
-		if (this.settings.projectRoot) return;
+		if (this.settings.projects.length > 0) return;
 		const adapter = this.app.vault.adapter;
 		if (adapter instanceof FileSystemAdapter) {
 			const base = adapter.getBasePath();
 			if (existsSync(join(base, ".beads"))) {
-				this.settings.projectRoot = base;
-				void this.saveSettings();
+				const p = projectFor(base, []);
+				this.settings.projects = [p];
+				this.settings.activeProject = p.name;
+				void this.saveData(this.settings);
 			}
 		}
 	}
@@ -372,9 +434,10 @@ export default class BeadsPlugin extends Plugin {
 		const el = this.statusBarEl;
 		if (!el) return;
 		const n = this.readyCount;
-		el.setText(
-			this.countsError ? "● bd error" : typeof n === "number" ? `● ${n} ready` : "",
-		);
+		const text = this.countsError ? "● bd error" : typeof n === "number" ? `● ${n} ready` : "";
+		// Name the project only when there is more than one to tell apart.
+		const name = this.settings.projects.length > 1 ? this.settings.activeProject : "";
+		el.setText(text && name ? `${name.length > 16 ? `${name.slice(0, 15)}…` : name} ${text}` : text);
 		el.toggleClass("is-error", !!this.countsError);
 		const st = this.feed?.current;
 		el.setAttribute(
@@ -386,5 +449,30 @@ export default class BeadsPlugin extends Plugin {
 					: `Beads: ${st?.detail ?? ""}`,
 		);
 		el.toggleClass("is-live", st?.mode === "journal");
+	}
+}
+
+/** "Switch project": pick the active project by name. */
+class ProjectSuggestModal extends SuggestModal<BeadsProject> {
+	constructor(
+		app: App,
+		private plugin: BeadsPlugin,
+	) {
+		super(app);
+		this.setPlaceholder("Switch to project…");
+	}
+
+	getSuggestions(query: string): BeadsProject[] {
+		const q = query.toLowerCase();
+		return this.plugin.settings.projects.filter((p) => p.name.toLowerCase().includes(q));
+	}
+
+	renderSuggestion(p: BeadsProject, el: HTMLElement): void {
+		el.createDiv({ text: p.name });
+		el.createEl("small", { cls: "beads-suggest-path", text: p.path });
+	}
+
+	onChooseSuggestion(p: BeadsProject): void {
+		void this.plugin.setActiveProject(p.name);
 	}
 }

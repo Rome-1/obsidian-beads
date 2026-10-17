@@ -3,10 +3,13 @@ import type BeadsPlugin from "./main";
 import { bdVersion } from "./bd";
 import { parsePatterns } from "./filter";
 import { JournalModal } from "./view";
+import { BeadsProject, activeName, projectsError, uniqueName } from "./projects";
 
 export interface BeadsSettings {
-	/** Absolute path to the project root (the directory containing `.beads/`). */
-	projectRoot: string;
+	/** The bd workspaces the user keeps. Names are unique and non-empty. */
+	projects: BeadsProject[];
+	/** Name of the project the pane, feed, and status bar follow. */
+	activeProject: string;
 	/** Path to the bd binary, or just "bd" to resolve via PATH. */
 	bdPath: string;
 	/**
@@ -23,7 +26,8 @@ export interface BeadsSettings {
 }
 
 export const DEFAULT_SETTINGS: BeadsSettings = {
-	projectRoot: "",
+	projects: [],
+	activeProject: "",
 	bdPath: "bd",
 	refreshIntervalSec: 30,
 	savedAssignees: [],
@@ -43,25 +47,13 @@ export class BeadsSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		new Setting(containerEl)
-			.setName("Project root")
-			.setDesc(
-				"Absolute path to the directory that contains the .beads/ database.",
-			)
-			.addText((text) =>
-				text
-					.setPlaceholder("/home/you/my-project")
-					.setValue(this.plugin.settings.projectRoot)
-					.onChange(async (value) => {
-						this.plugin.settings.projectRoot = value.trim();
-						await this.plugin.saveSettings();
-					}),
-			);
+		this.activeSetting = new Setting(containerEl).setName("Active project");
+		this.renderActive();
 
 		new Setting(containerEl)
 			.setName("bd binary path")
 			.setDesc(
-				'Path to the bd executable. If "Test connection" fails with "not found", run `which bd` in a terminal and paste the full path here — apps launched from the GUI often don\'t inherit your shell PATH.',
+				'Path to the bd executable. If a project\'s "Test" fails with "not found", run `which bd` in a terminal and paste the full path here — apps launched from the GUI often don\'t inherit your shell PATH.',
 			)
 			.addText((text) =>
 				text
@@ -124,25 +116,123 @@ export class BeadsSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
-			.setName("Test connection")
-			.setDesc("Run `bd --version` in the project root to verify settings.")
-			.addButton((btn) =>
-				btn.setButtonText("Test").onClick(async () => {
-					const s = this.plugin.settings;
-					if (!s.projectRoot) {
-						new Notice("Beads: set a project root first.");
-						return;
-					}
-					try {
-						const v = await bdVersion({
-							bdPath: s.bdPath,
-							cwd: s.projectRoot,
-						});
-						new Notice(`Beads: OK — ${v}`);
-					} catch (e) {
-						new Notice(`Beads: ${(e as Error).message}`);
-					}
-				}),
+			.setName("Projects")
+			.setHeading()
+			.setDesc(
+				"Each project is a name and the directory that contains its .beads/ database.",
 			);
+		this.listEl = containerEl.createDiv();
+		this.errorEl = containerEl.createDiv({ cls: "beads-settings-error" });
+		this.draft = this.plugin.settings.projects.map((p) => ({ ...p, saved: p.name }));
+		this.renderProjects();
+		new Setting(containerEl).addButton((btn) =>
+			btn.setButtonText("Add project").onClick(async () => {
+				const names = this.draft.map((p) => p.name);
+				this.draft.push({ name: uniqueName("Project", names), path: "", saved: null });
+				this.renderProjects();
+				await this.commit();
+			}),
+		);
+	}
+
+	/** The project list being edited, and each row's name as last saved (null: never saved). */
+	private draft: (BeadsProject & { saved: string | null })[] = [];
+	private listEl: HTMLElement | null = null;
+	private errorEl: HTMLElement | null = null;
+	private activeSetting: Setting | null = null;
+
+	/** One row per draft project: name, path, Test, Remove. */
+	private renderProjects(): void {
+		const list = this.listEl;
+		if (!list) return;
+		list.empty();
+		for (const p of this.draft) {
+			new Setting(list)
+				.addText((text) =>
+					text
+						.setPlaceholder("Name")
+						.setValue(p.name)
+						.onChange(async (value) => {
+							p.name = value;
+							await this.commit();
+						}),
+				)
+				.addText((text) =>
+					text
+						.setPlaceholder("/home/you/my-project")
+						.setValue(p.path)
+						.onChange(async (value) => {
+							p.path = value.trim();
+							await this.commit();
+						}),
+				)
+				.addButton((btn) =>
+					btn.setButtonText("Test").onClick(async () => {
+						if (!p.path) {
+							new Notice("Beads: set the project's path first.");
+							return;
+						}
+						try {
+							const v = await bdVersion({ bdPath: this.plugin.settings.bdPath, cwd: p.path });
+							new Notice(`Beads: OK — ${v}`);
+						} catch (e) {
+							new Notice(`Beads: ${(e as Error).message}`);
+						}
+					}),
+				)
+				.addExtraButton((btn) =>
+					btn
+						.setIcon("trash")
+						.setTooltip("Remove project")
+						.onClick(async () => {
+							this.draft.splice(this.draft.indexOf(p), 1);
+							this.renderProjects();
+							await this.commit();
+						}),
+				);
+		}
+	}
+
+	/**
+	 * Save the draft list if it is valid; otherwise say why inline and keep
+	 * the saved list as it was. A rename carries the active project with it.
+	 */
+	private async commit(): Promise<void> {
+		const projects = this.draft.map((p) => ({ name: p.name.trim(), path: p.path }));
+		const error = projectsError(projects);
+		this.errorEl?.setText(error ?? "");
+		if (error) return;
+		const s = this.plugin.settings;
+		let active = s.activeProject;
+		for (const p of this.draft) {
+			const name = p.name.trim();
+			if (p.saved !== null && p.saved !== name) {
+				if (p.saved === active) active = name;
+				this.plugin.renameProject(p.saved, name);
+			}
+			p.saved = name;
+		}
+		s.projects = projects;
+		s.activeProject = activeName(projects, active);
+		await this.plugin.saveSettings();
+		this.renderActive();
+	}
+
+	/** The active-project dropdown, refilled in place so typing keeps focus. */
+	private renderActive(): void {
+		const setting = this.activeSetting;
+		if (!setting) return;
+		setting.controlEl.empty();
+		const s = this.plugin.settings;
+		setting.setDesc(
+			s.projects.length === 0
+				? "Add a project under Projects below."
+				: "The project the pane, status bar, and live updates follow. Open bead tabs stay with their own.",
+		);
+		if (s.projects.length === 0) return;
+		setting.addDropdown((dd) => {
+			for (const p of s.projects) dd.addOption(p.name, p.name);
+			dd.setValue(s.activeProject).onChange((name) => void this.plugin.setActiveProject(name));
+		});
 	}
 }

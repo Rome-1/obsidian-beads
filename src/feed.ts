@@ -110,7 +110,7 @@ export class BeadsFeed {
 		const gen = ++this.gen;
 		const opts = this.host.bdOptions();
 		if (!opts) {
-			this.setStatus({ mode: "watch", journalAvailable: false, detail: "No project root" });
+			this.setStatus({ mode: "watch", journalAvailable: false, detail: "No project" });
 			return;
 		}
 		this.startWatch(opts);

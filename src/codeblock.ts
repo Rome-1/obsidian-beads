@@ -17,6 +17,8 @@ interface BlockConfig {
 	source: Source;
 	query?: string;
 	limit: number;
+	/** A project by name; absent = the active project. */
+	project?: string;
 }
 
 const DEFAULT_LIMIT = 30;
@@ -24,7 +26,8 @@ const DEFAULT_LIMIT = 30;
 /**
  * Parse a `beads` code block. Whitelisted, tiny grammar (one directive per
  * line): a bare `ready` / `blocked` / `list`, or `query: <expr>`, plus an
- * optional `limit: <n>`. Anything else is an explicit error, not a guess.
+ * optional `limit: <n>` and `project: <name>`. Anything else is an explicit
+ * error, not a guess.
  */
 export function parseBlockConfig(
 	src: string,
@@ -32,6 +35,7 @@ export function parseBlockConfig(
 	let source: Source | null = null;
 	let query: string | undefined;
 	let limit = DEFAULT_LIMIT;
+	let project: string | undefined;
 
 	for (const raw of src.split("\n")) {
 		const line = raw.trim();
@@ -44,7 +48,7 @@ export function parseBlockConfig(
 				source = kw;
 			} else {
 				return {
-					error: `Unknown directive "${line}". Use ready, blocked, list, query:, or limit:.`,
+					error: `Unknown directive "${line}". Use ready, blocked, list, query:, limit:, or project:.`,
 				};
 			}
 			continue;
@@ -58,6 +62,9 @@ export function parseBlockConfig(
 		} else if (key === "limit") {
 			const n = Number.parseInt(val, 10);
 			if (Number.isFinite(n) && n > 0) limit = n;
+		} else if (key === "project") {
+			if (!val) return { error: "project: needs a project name from Beads settings." };
+			project = val;
 		} else if (key === "source") {
 			if (val === "ready" || val === "blocked" || val === "list") {
 				source = val;
@@ -66,7 +73,7 @@ export function parseBlockConfig(
 			}
 		} else {
 			return {
-				error: `Unknown key "${key}". Allowed: query, limit (or a bare ready / blocked / list).`,
+				error: `Unknown key "${key}". Allowed: query, limit, project (or a bare ready / blocked / list).`,
 			};
 		}
 	}
@@ -81,7 +88,7 @@ export function parseBlockConfig(
 			error: "query: needs an expression, e.g. `query: status=open AND priority<=1`.",
 		};
 	}
-	return { config: { source, query, limit } };
+	return { config: { source, query, limit, project } };
 }
 
 function fetchForConfig(
@@ -109,7 +116,9 @@ function fetchForConfig(
  * shared concurrency cap + TTL cache in bd.ts, limits are clamped there, and a
  * block re-fetches only on note re-render or when beads actually change (a
  * journal record or a `.beads` write, coalesced by the plugin) — never on a
- * timer. Blocks register while on screen and unregister when unloaded.
+ * timer. Blocks register while on screen and unregister when unloaded. The
+ * plugin follows only the active project, so a block pinned to another one
+ * with `project:` refreshes on note re-render alone.
  */
 export function registerBeadsCodeBlock(plugin: BeadsPlugin): void {
 	plugin.registerMarkdownCodeBlockProcessor("beads", async (src, el, ctx) => {
@@ -120,20 +129,23 @@ export function registerBeadsCodeBlock(plugin: BeadsPlugin): void {
 			return;
 		}
 		const cfg = parsed.config;
-
-		if (!plugin.settings.projectRoot) {
-			el.createDiv({
-				cls: "beads-embed-error",
-				text: "Beads: no project root set (Settings → Beads).",
-			});
-			return;
-		}
 		const list = el.createDiv({ cls: "beads-embed-list" });
 
 		const render = async (): Promise<void> => {
 			// Read settings on every render: a live block outlives a settings change.
 			const s = plugin.settings;
-			const opts: BdOptions = { bdPath: s.bdPath, cwd: s.projectRoot };
+			const project = plugin.project(cfg.project);
+			if (!project?.path) {
+				list.empty();
+				list.createDiv({
+					cls: "beads-embed-error",
+					text: cfg.project && !project
+						? `Beads: no project named "${cfg.project}". Projects: ${s.projects.map((p) => p.name).join(", ") || "none"} (Settings → Beads).`
+						: "Beads: no project path set (Settings → Beads).",
+				});
+				return;
+			}
+			const opts: BdOptions = { bdPath: s.bdPath, cwd: project.path };
 			try {
 				const issues = await fetchForConfig(cfg, opts);
 				list.empty();
@@ -157,7 +169,10 @@ export function registerBeadsCodeBlock(plugin: BeadsPlugin): void {
 		};
 
 		const live = new MarkdownRenderChild(el);
-		const rerender = () => void render();
+		// Live changes come from the active project only.
+		const rerender = () => {
+			if (!cfg.project || cfg.project === plugin.settings.activeProject) void render();
+		};
 		live.onload = () => plugin.embeds.add(rerender);
 		live.onunload = () => plugin.embeds.delete(rerender);
 		ctx.addChild(live);
