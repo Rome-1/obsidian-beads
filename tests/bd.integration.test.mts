@@ -158,7 +158,10 @@ function seedFilterData(): Promise<void> {
 		const blocked = await mk("f-alice-task-x-blocked", "task", "alice", ["fx"]);
 		bd("dep", "add", blocked, blocker);
 		const closed = await mk("f-alice-bug-x-closed", "bug", "alice", ["fx"]);
-		bd("close", closed, "--reason", "done");
+		// `bd close` refuses a bead assigned to someone other than the actor
+		// (bd >= 1.3.0); `bd update --status=closed`, which the plugin uses, doesn't.
+		bd("update", closed, "--status=closed");
+		assert.equal((await bdShow(opts, closed))?.status, "closed", "the closed-tab cases need a closed bead");
 	})();
 	return seeded;
 }
