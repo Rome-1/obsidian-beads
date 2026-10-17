@@ -41,9 +41,17 @@ import {
 } from "../src/filter.ts";
 
 const BD = process.env.BD_BIN ?? "bd";
+/**
+ * The caller's environment without anything that could point bd at a real
+ * database (BEADS_DIR, BEADS_DOLT_PORT, BD_*, DOLT_*). Every bd call here
+ * gets this, plus only what a test sets itself.
+ */
+const cleanEnv: NodeJS.ProcessEnv = Object.fromEntries(
+	Object.entries(process.env).filter(([k]) => !/^(BEADS_|BD_|DOLT)/.test(k)),
+);
 const hasBd = (() => {
 	try {
-		execFileSync(BD, ["--version"], { stdio: "ignore" });
+		execFileSync(BD, ["--version"], { stdio: "ignore", env: cleanEnv });
 		return true;
 	} catch {
 		return false;
@@ -56,7 +64,7 @@ let opts: BdOptions;
 
 /** Run bd directly in the test database (for setup the plugin never does). */
 function bd(...args: string[]): string {
-	return execFileSync(BD, args, { cwd: dir, encoding: "utf8" });
+	return execFileSync(BD, args, { cwd: dir, encoding: "utf8", env: opts.env });
 }
 
 before(() => {
@@ -66,11 +74,22 @@ before(() => {
 	// database from its cwd, exactly like the plugin does with the project root.
 	execFileSync(BD, ["init", "--quiet", "--stealth", "--skip-agents", "--prefix", "it"], {
 		cwd: dir,
-		env: { ...process.env, BEADS_DIR: join(dir, ".beads") },
+		env: { ...cleanEnv, BEADS_DIR: join(dir, ".beads") },
 		stdio: "ignore",
 	});
-	opts = { bdPath: BD, cwd: dir, timeoutMs: 30_000 };
+	opts = { bdPath: BD, cwd: dir, timeoutMs: 30_000, env: cleanEnv };
 });
+
+/** Run `fn` with BD_JSON_ENVELOPE=1 (the bd v2.0 default) on every bd call. */
+async function withEnvelope<T>(fn: () => Promise<T>): Promise<T> {
+	const saved = opts;
+	opts = { ...saved, env: { ...saved.env, BD_JSON_ENVELOPE: "1" } };
+	try {
+		return await fn();
+	} finally {
+		opts = saved;
+	}
+}
 
 after(() => {
 	if (dir) rmSync(dir, { recursive: true, force: true });
@@ -246,9 +265,7 @@ test("every bd call reads the same data with BD_JSON_ENVELOPE=1 (bd v2.0 default
 		types: await bdTypeNames(opts),
 	});
 	const legacy = await snapshot();
-	const prev = process.env.BD_JSON_ENVELOPE;
-	process.env.BD_JSON_ENVELOPE = "1"; // inherited by the bd child processes
-	try {
+	await withEnvelope(async () => {
 		// The envelope really is on: raw output is wrapped.
 		assert.ok("data" in (JSON.parse(bd("count", "--status", "open", "--json")) as object));
 		const enveloped = await snapshot();
@@ -257,10 +274,7 @@ test("every bd call reads the same data with BD_JSON_ENVELOPE=1 (bd v2.0 default
 		assert.equal(enveloped.count, legacy.count + 1);
 		assert.equal(enveloped.open.length, legacy.open.length + 1);
 		assert.ok(legacy.comments.includes("hello") && legacy.readyCount && legacy.created);
-	} finally {
-		if (prev === undefined) delete process.env.BD_JSON_ENVELOPE;
-		else process.env.BD_JSON_ENVELOPE = prev;
-	}
+	});
 });
 
 // --- tab counts match the tab lists (bd status undercounts ready) ------------
@@ -315,15 +329,10 @@ test("bdHeadCommit reads the Dolt commit in both JSON formats", { skip }, async 
 	// `bd vc status --json` wraps its payload under BD_JSON_ENVELOPE=1, so a
 	// raw JSON.parse(stdout).commit would read undefined and the feed's
 	// heartbeat would never notice a sync. parseJson unwraps it.
-	const prev = process.env.BD_JSON_ENVELOPE;
-	process.env.BD_JSON_ENVELOPE = "1";
-	try {
+	await withEnvelope(async () => {
 		assert.ok("data" in (JSON.parse(bd("vc", "status", "--json")) as object), "envelope is really on");
 		assert.equal(await bdHeadCommit(opts), legacy);
-	} finally {
-		if (prev === undefined) delete process.env.BD_JSON_ENVELOPE;
-		else process.env.BD_JSON_ENVELOPE = prev;
-	}
+	});
 });
 
 test("bdHeadCommit moves when the workspace commits, so the heartbeat can see syncs", { skip }, async () => {

@@ -44,6 +44,8 @@ export interface BdOptions {
 	/** Working directory — the project root containing `.beads`. */
 	cwd: string;
 	timeoutMs?: number;
+	/** Environment for the bd process (default: inherit Obsidian's). */
+	env?: NodeJS.ProcessEnv;
 	/** Cancels the call: it never starts if still queued, and is killed if running. */
 	signal?: AbortSignal;
 }
@@ -78,6 +80,7 @@ function rawExec(args: string[], opts: BdOptions): Promise<BdResult> {
 				timeout: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
 				maxBuffer: MAX_BUFFER,
 				windowsHide: true,
+				env: opts.env,
 				signal: opts.signal,
 			},
 			(err, stdout, stderr) => {
