@@ -285,6 +285,12 @@ test("tabCounts: counts come from the same sources as the lists, with the filter
 		"count in_progress --no-assignee --label=x",
 		"ready --unassigned --label=x",
 	]);
+	// A tab whose whole list is loaded is counted from its rows, with no bd call.
+	calls.length = 0;
+	const known = await tabCounts(f(), src, { ready: 5, blocked: 1 });
+	assert.equal(known.ready_issues, 5);
+	assert.equal(known.blocked_issues, 1);
+	assert.deepEqual(calls.sort(), ["count closed ", "count in_progress "]);
 });
 
 test("suggestAssignees moves an exact match to the front so Enter can't pick a longer name (review)", () => {

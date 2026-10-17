@@ -1,4 +1,5 @@
 import type { BeadIssue } from "./types";
+import type { TabKey } from "./journal";
 
 /**
  * The pane's filter: assignee, labels (AND — must have all), and type.
@@ -212,18 +213,25 @@ export interface CountSources {
  * is `open − blocked`, where "blocked" also includes blocked *deferred* (and
  * in-progress) beads that were never in the open count — so it undercounts
  * (Govini: status said 1 ready while `bd ready` listed 4).
+ *
+ * `known` holds the counts of tabs whose whole list is already loaded (its
+ * length); those tabs cost no bd call.
  */
-export async function tabCounts(f: PaneFilter, src: CountSources): Promise<Record<string, number>> {
+export async function tabCounts(
+	f: PaneFilter,
+	src: CountSources,
+	known: Partial<Record<TabKey, number>> = {},
+): Promise<Record<string, number>> {
 	const [ready, inProgress, closed, blocked] = await Promise.all([
-		src.ready(filterArgs(f, "ready")),
-		src.count("in_progress", filterArgs(f, "count")),
-		src.count("closed", filterArgs(f, "count")),
-		src.blocked(),
+		known.ready ?? src.ready(filterArgs(f, "ready")).then((l) => l.length),
+		known.in_progress ?? src.count("in_progress", filterArgs(f, "count")),
+		known.closed ?? src.count("closed", filterArgs(f, "count")),
+		known.blocked ?? src.blocked().then((l) => l.filter((i) => matchesFilter(i, f)).length),
 	]);
 	return {
-		ready_issues: ready.length,
+		ready_issues: ready,
 		in_progress_issues: inProgress,
 		closed_issues: closed,
-		blocked_issues: blocked.filter((i) => matchesFilter(i, f)).length,
+		blocked_issues: blocked,
 	};
 }

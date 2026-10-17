@@ -30,7 +30,8 @@ export default class BeadsPlugin extends Plugin {
 	 * `tabCounts` in filter.ts). null = not read yet, or the read failed.
 	 *
 	 * The pane's tab counts are per-view, because they follow that pane's
-	 * filter; only this unfiltered number is shared.
+	 * filter. An unfiltered pane already lists the same set, so while one is
+	 * open its count is used (`setReadyCount`) and this reads nothing.
 	 */
 	readyCount: number | null = null;
 	/** Why the last count read failed (bd missing, broken store), if it did. */
@@ -254,16 +255,32 @@ export default class BeadsPlugin extends Plugin {
 	/** Re-read every open Beads pane and the counts (manual refresh, own writes). */
 	refreshViews(): void {
 		invalidateReadCache();
+		// Each pane re-reads its own counts.
 		for (const view of this.panes()) void view.refresh();
-		this.scheduleCounts(0);
+		if (this.countsTimer !== null) window.clearTimeout(this.countsTimer);
+		this.countsTimer = null;
+		if (!this.hasUnfilteredPane()) void this.loadCounts();
+	}
+
+	/** An unfiltered pane's ready count, so the status bar needs no `bd ready` of its own. */
+	setReadyCount(n: number): void {
+		if (n === this.readyCount && !this.countsError) return;
+		this.readyCount = n;
+		this.countsError = "";
+		this.renderStatusBar();
+	}
+
+	private hasUnfilteredPane(): boolean {
+		return this.panes().some((v) => v.isUnfiltered());
 	}
 
 	/** Journal records: patch what is on screen instead of re-listing. */
 	private onRecords(recs: JournalRecord[]): void {
+		// Each pane recounts its own tabs when a record can move them.
 		for (const view of this.panes()) view.applyRecords(recs);
 		let recount = false;
 		for (const r of recs) recount = affectsCounts(r, this.seen) || recount;
-		if (recount) this.scheduleCounts();
+		if (recount && !this.hasUnfilteredPane()) this.scheduleCounts();
 		const ids = new Set(recs.map((r) => r.issue_id));
 		for (const ed of this.editors()) ed.onExternalChange(ids);
 		this.scheduleEmbeds();
@@ -286,7 +303,7 @@ export default class BeadsPlugin extends Plugin {
 		this.renderStatusBar();
 	}
 
-	/** Coalesce count refreshes: one read per burst of changes. */
+	/** Coalesce status-bar count reads: one per burst of changes. */
 	scheduleCounts(delayMs = 300): void {
 		if (this.countsTimer !== null) window.clearTimeout(this.countsTimer);
 		this.countsTimer = window.setTimeout(() => {
@@ -318,8 +335,6 @@ export default class BeadsPlugin extends Plugin {
 			this.countsInFlight = false;
 		}
 		this.renderStatusBar();
-		// Each pane re-reads its own filtered tab counts.
-		for (const view of this.panes()) view.onCounts();
 		if (this.countsAgain) {
 			this.countsAgain = false;
 			void this.loadCounts();
