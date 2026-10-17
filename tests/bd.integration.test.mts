@@ -1,6 +1,6 @@
 /**
  * Integration tests against the REAL `bd` binary and a throwaway database —
- * no mocks (see AGENTS.md). They pin the bd behaviour the plugin relies on:
+ * no mocks. They pin the bd behaviour the plugin relies on:
  * text-field flags round-trip, "" clears a field, `dep list` directions and
  * types, and the lineage walk over real `bd dep list` output.
  *

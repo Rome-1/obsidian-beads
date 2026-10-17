@@ -212,7 +212,8 @@ export interface CountSources {
  * count always matches what the tab shows. NOT `bd status`: its ready_issues
  * is `open − blocked`, where "blocked" also includes blocked *deferred* (and
  * in-progress) beads that were never in the open count — so it undercounts
- * (Govini: status said 1 ready while `bd ready` listed 4).
+ * (on a real database of about 900 beads, status said 1 ready while `bd ready`
+ * listed 4).
  *
  * `known` holds the counts of tabs whose whole list is already loaded (its
  * length); those tabs cost no bd call.

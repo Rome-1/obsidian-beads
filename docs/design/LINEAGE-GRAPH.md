@@ -22,7 +22,7 @@ Verified with bd 1.2.2 by pouring `mol-sbs-test` into a scratch database:
   - each step has a `parent` pointing at the root, plus a `parent-child` dependency edge
   - each formula `needs` becomes a `blocks` edge
 - **Variables are not stored as data.** They exist only as text substituted into titles and descriptions. `metadata` stays `{}`, and nothing records the formula version.
-- **The Govini harness deletes the root after pouring.** `backlog.sh` runs `bd delete <root> --force`, which removes the root, the `parent` link and all `parent-child` edges. The steps keep only their `blocks` edges.
+- **One real harness deletes the root after pouring.** `backlog.sh` runs `bd delete <root> --force`, which removes the root, the `parent` link and all `parent-child` edges. The steps keep only their `blocks` edges.
   - For the beads poured on 2026-09-16, the root is also missing from Dolt history (`dolt_history_*`).
 - **Still available**:
   - the full `blocks` graph
@@ -31,7 +31,7 @@ Verified with bd 1.2.2 by pouring `mol-sbs-test` into a scratch database:
 
 ## Where the data can come from
 
-Measured on the Govini database (server mode, about 900 beads):
+Measured on a real database (server mode, about 900 beads):
 
 | Source | Result | Verdict |
 | --- | --- | --- |
@@ -77,7 +77,7 @@ Measured on the Govini database (server mode, about 900 beads):
   - `src/lineage.ts`: the pure walk and the dagre layout. The bd call is injected; covered by `tests/lineage.test.mts`.
   - `src/lineage-view.ts`: the `ItemView`, SVG drawing, pan/zoom and clicks.
 
-Verified live on the Govini vault:
+Verified live on that database:
 
 | Focus | Result |
 | --- | --- |
