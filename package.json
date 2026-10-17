@@ -7,6 +7,8 @@
     "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "lint": "eslint src/",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/*.test.mts",
+    "test:coverage": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning --experimental-test-coverage --test-coverage-exclude=tests/** --test tests/*.test.mts",
     "version": "node version-bump.mjs && git add manifest.json versions.json"
   },
   "keywords": [
@@ -17,6 +19,9 @@
   ],
   "author": "Rome Thorstenson",
   "license": "MIT",
+  "engines": {
+    "node": ">=22.6"
+  },
   "devDependencies": {
     "@types/node": "^20.12.0",
     "@typescript-eslint/eslint-plugin": "^8.65.0",
@@ -28,5 +33,8 @@
     "tslib": "^2.6.2",
     "typescript": "^5.4.0",
     "typescript-eslint": "^8.65.0"
+  },
+  "dependencies": {
+    "@dagrejs/dagre": "^3.1.1"
   }
 }

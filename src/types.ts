@@ -1,5 +1,6 @@
 export const VIEW_TYPE_BEADS = "beads-pane";
 export const VIEW_TYPE_BEADS_EDITOR = "beads-editor";
+export const VIEW_TYPE_BEADS_LINEAGE = "beads-lineage";
 
 /** Common issue types offered in the capture / edit dropdowns. */
 export const ISSUE_TYPES = [
@@ -41,6 +42,10 @@ export interface BeadIssue {
 	owner?: string;
 	assignee?: string;
 	description?: string;
+	/** Markdown text fields beyond the description (`bd show` renders all as markdown). */
+	design?: string;
+	notes?: string;
+	acceptance_criteria?: string;
 	created_at?: string;
 	updated_at?: string;
 	created_by?: string;

@@ -1,6 +1,7 @@
 import { App, PluginSettingTab, Setting, Notice } from "obsidian";
 import type BeadsPlugin from "./main";
 import { bdVersion } from "./bd";
+import { parsePatterns } from "./filter";
 import { JournalModal } from "./view";
 
 export interface BeadsSettings {
@@ -13,6 +14,10 @@ export interface BeadsSettings {
 	 * check for changes the journal can't see, like a sync (0 = never).
 	 */
 	refreshIntervalSec: number;
+	/** Assignee names typed into the pane filter, most recent first (user-curated). */
+	savedAssignees: string[];
+	/** bd assignees to leave out of suggestions: exact names or `*` globs. */
+	hiddenAssignees: string[];
 	/** The user declined the in-pane offer to turn on the events journal. */
 	journalOfferDismissed: boolean;
 }
@@ -21,6 +26,8 @@ export const DEFAULT_SETTINGS: BeadsSettings = {
 	projectRoot: "",
 	bdPath: "bd",
 	refreshIntervalSec: 30,
+	savedAssignees: [],
+	hiddenAssignees: [],
 	journalOfferDismissed: false,
 };
 
@@ -99,6 +106,22 @@ export class BeadsSettingTab extends PluginSettingTab {
 				}),
 			);
 		}
+
+		new Setting(containerEl)
+			.setName("Hide assignees matching")
+			.setDesc(
+				"Assignees bd knows about that the pane's assignee box shouldn't suggest — one per line. Use * as a wildcard (e.g. harness-*). The × on a suggestion adds its name here. Typing a hidden name still filters for it.",
+			)
+			.addTextArea((text) => {
+				text
+					.setPlaceholder("harness-*")
+					.setValue(this.plugin.settings.hiddenAssignees.join("\n"))
+					.onChange(async (value) => {
+						this.plugin.settings.hiddenAssignees = parsePatterns(value);
+						await this.plugin.saveSettings();
+					});
+				text.inputEl.rows = 4;
+			});
 
 		new Setting(containerEl)
 			.setName("Test connection")

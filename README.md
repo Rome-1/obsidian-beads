@@ -17,11 +17,31 @@ who tracks work in `bd` and lives in Obsidian.
   can do right now*. Only the active tab hits `bd`, and each paginates with **Load
   more**, so the pane opens fast even with thousands of closed issues. Blocked rows show
   a `⛓ n` hint.
+- 📝 **Rendered markdown text** — the description, design, notes, and acceptance
+  criteria render as markdown (like `bd show`). Click one (or its pencil) to edit the
+  raw text; Escape or click away to go back to the preview. Empty extra fields sit
+  behind a `+ Notes` / `+ Design` / `+ Acceptance criteria` button.
+- 🔎 **Filter the pane** — the funnel icon opens an **assignee / type / labels** filter
+  bar (labels are AND: a bead must carry every chosen label). Filters apply to every
+  tab and its count, and are remembered with the workspace. **Assignee** is a text box:
+  type any name and press Enter (or pick a suggestion); the **×** inside the box — or
+  Enter on an empty box ("Anyone") — clears it. An exact match is always offered first. Names you use are remembered and listed first — **×** removes one from
+  your list; bd's other assignees follow (`bd count --by-assignee`) — **×** hides one.
+  Hide many at once with **Settings → Hide assignees matching** (one per line, `*`
+  wildcard, e.g. `harness-*`). Esc closes the suggestions, Esc again (or clicking away)
+  restores the applied value. Types and labels come from `bd types` / `bd label list-all`.
 - ✏️ **Edit in a tab** — click a row and the bead opens like a note (not a popup): a
   title, a **Properties** panel of typed controls (status — set it to `closed` to close,
-  or back to `open` to reopen — priority, type, assignee, labels) and a **markdown
-  description**. Save (or ⌘/Ctrl-S) writes only the changed fields via `bd update`.
-  **Blocked by** / **Blocks** and the **comment thread** (rendered markdown) show below.
+  or back to `open` to reopen — priority, type, assignee, labels) and **markdown text
+  fields** (description, design, notes, acceptance criteria) that render as preview and
+  open for editing on click. Save (or ⌘/Ctrl-S) writes only the changed fields via
+  `bd update`. **Blocked by** / **Blocks** and the **comment thread** (rendered
+  markdown) show below.
+- 🧬 **Lineage graph** — the git-fork button in the editor (or *Beads: Show lineage of
+  current bead*) opens a navigable graph of everything the bead depends on (left) and
+  everything that depends on it (right), transitively. Click a bead to re-centre,
+  click the centre bead (or ⌘/Ctrl-click any) to open it, drag to pan, scroll to zoom;
+  wide fan-outs fold into "+N more".
 - ⚡ **New bead** — *Beads: New bead* (or the `+` in the pane) opens the same editor,
   blank (`bd create`).
 - 📄 **Live `beads` code blocks** — embed a query in any note (Dataview-style) and get
@@ -150,6 +170,7 @@ local reader, it is still in preview, and today it refuses the default embedded 
 | `bd` binary path | `bd` | Path to the `bd` executable. If not found, use the full path from `which bd` (see Troubleshooting). |
 | Auto-refresh interval | `30` | Seconds between refreshes (`0` disables). With live updates on, how often to check for changes the journal can't see, such as a sync. |
 | Live updates | — | Shows whether the pane is following the events journal, and offers to turn it on. |
+| Hide assignees matching | *(empty)* | bd assignees the pane's assignee box won't suggest — one per line, `*` wildcard (e.g. `harness-*`). The × on a suggestion adds its name here. |
 
 ## Troubleshooting
 
@@ -193,7 +214,10 @@ local reader, it is still in preview, and today it refuses the default embedded 
 npm install
 npm run dev     # esbuild watch → main.js
 npm run build   # typecheck + production bundle
+npm test        # unit tests, plus integration tests when bd is on PATH (or BD_BIN)
 ```
+
+`npm test` needs Node 22.6 or later, which runs the TypeScript tests directly.
 
 To test against a real vault, symlink or copy `main.js`, `manifest.json`, and
 `styles.css` into `<vault>/.obsidian/plugins/beads-pane/`.

@@ -1,4 +1,4 @@
-import { BeadIssue } from "./types";
+import type { BeadIssue } from "./types";
 
 /**
  * One line of `bd events tail` (bd >= 1.3.0). `issue` is the bead's full state
@@ -73,10 +73,16 @@ function fits(tab: TabKey, i: BeadIssue, now: number): "yes" | "maybe" | "no" {
  * (edit a row, drop a row that no longer belongs, insert into a fully loaded
  * status list) happen here with no bd call. Returns the tabs whose membership
  * only bd can settle; the caller re-reads those.
+ *
+ * `inScope` is the pane's filter (assignee / labels / type). The lists it
+ * patches were read with that filter applied as bd flags, so a bead the filter
+ * excludes doesn't belong in any tab — same outcome as not fitting the tab.
+ * Without it, a record for a filtered-out bead would be inserted on screen.
  */
 export function applyRecord(
 	tabs: Record<TabKey, TabList>,
 	rec: JournalRecord,
+	inScope: (issue: BeadIssue) => boolean = () => true,
 	now = Date.now(),
 ): Set<TabKey> {
 	const stale = new Set<TabKey>();
@@ -88,7 +94,7 @@ export function applyRecord(
 			if (at !== -1) tab.issues.splice(at, 1);
 			continue;
 		}
-		const fit = fits(key, rec.issue, now);
+		const fit = inScope(rec.issue) ? fits(key, rec.issue, now) : "no";
 		if (fit === "no") {
 			if (at !== -1) tab.issues.splice(at, 1);
 		} else if (at !== -1) {
@@ -115,17 +121,22 @@ export function applyRecord(
  * Whether a record can move the per-status counts. `seen` holds the last
  * count-relevant state per id and is updated here; a first sighting counts
  * as a change, so this errs toward re-counting.
+ *
+ * `inScope` is the pane's filter: a bead entering or leaving it (reassigned,
+ * relabelled, retyped) moves that pane's counts, and changes to a bead outside
+ * it move none.
  */
 export function affectsCounts(
 	rec: JournalRecord,
 	seen: Map<string, string>,
+	inScope: (issue: BeadIssue) => boolean = () => true,
 ): boolean {
 	if (!rec.issue) {
 		seen.delete(rec.issue_id);
 		return true;
 	}
 	const i = rec.issue;
-	const key = `${i.status}|${i.is_blocked === true}|${i.defer_until ?? ""}`;
+	const key = inScope(i) ? `${i.status}|${i.is_blocked === true}|${i.defer_until ?? ""}` : "out";
 	const prev = seen.get(rec.issue_id);
 	seen.set(rec.issue_id, key);
 	return prev !== key;

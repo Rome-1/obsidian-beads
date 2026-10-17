@@ -8,18 +8,32 @@ import {
 } from "./settings";
 import { BeadsView } from "./view";
 import { BeadEditorView } from "./editor";
-import { VIEW_TYPE_BEADS, VIEW_TYPE_BEADS_EDITOR } from "./types";
-import { BdOptions, bdStatusCounts, invalidateReadCache } from "./bd";
+import { BeadLineageView } from "./lineage-view";
+import {
+	VIEW_TYPE_BEADS,
+	VIEW_TYPE_BEADS_EDITOR,
+	VIEW_TYPE_BEADS_LINEAGE,
+} from "./types";
+import { BdOptions, bdReadyCount, invalidateReadCache } from "./bd";
 import { registerBeadsCodeBlock } from "./codeblock";
 import { BeadsFeed, FeedStatus } from "./feed";
 import { JournalRecord, affectsCounts } from "./journal";
+import { parsePatterns, parseSavedAssignees } from "./filter";
 
 export default class BeadsPlugin extends Plugin {
 	settings!: BeadsSettings;
 
 	feed!: BeadsFeed;
-	/** `bd status` summary counts, shared by the pane tabs and the status bar. */
-	counts: Record<string, number> = {};
+	/**
+	 * The status bar's ready count, from `bd ready --limit 0` — the same command
+	 * the Ready tab lists, NOT `bd status` (its `ready_issues` undercounts; see
+	 * `tabCounts` in filter.ts). null = not read yet, or the read failed.
+	 *
+	 * The pane's tab counts are per-view, because they follow that pane's
+	 * filter. An unfiltered pane already lists the same set, so while one is
+	 * open its count is used (`setReadyCount`) and this reads nothing.
+	 */
+	readyCount: number | null = null;
 	/** Why the last count read failed (bd missing, broken store), if it did. */
 	private countsError = "";
 
@@ -49,6 +63,11 @@ export default class BeadsPlugin extends Plugin {
 			(leaf) => new BeadEditorView(leaf, this),
 		);
 
+		this.registerView(
+			VIEW_TYPE_BEADS_LINEAGE,
+			(leaf) => new BeadLineageView(leaf, this),
+		);
+
 		this.addRibbonIcon("list-checks", "Open Beads pane", () => {
 			void this.activateView();
 		});
@@ -63,6 +82,18 @@ export default class BeadsPlugin extends Plugin {
 			id: "new-bead",
 			name: "New bead",
 			callback: () => void this.newBead(),
+		});
+
+		this.addCommand({
+			id: "show-lineage",
+			name: "Show lineage of current bead",
+			checkCallback: (checking) => {
+				const view = this.app.workspace.getActiveViewOfType(BeadEditorView);
+				const id = view?.beadId;
+				if (!id) return false;
+				if (!checking) void this.openLineage(id);
+				return true;
+			},
 		});
 
 		this.addCommand({
@@ -111,6 +142,8 @@ export default class BeadsPlugin extends Plugin {
 	async loadSettings(): Promise<void> {
 		const data = (await this.loadData()) as Partial<BeadsSettings> | null;
 		this.settings = { ...DEFAULT_SETTINGS, ...(data ?? {}) };
+		this.settings.savedAssignees = parseSavedAssignees(this.settings.savedAssignees);
+		this.settings.hiddenAssignees = parsePatterns(this.settings.hiddenAssignees);
 	}
 
 	async saveSettings(): Promise<void> {
@@ -173,6 +206,26 @@ export default class BeadsPlugin extends Plugin {
 		await workspace.revealLeaf(leaf);
 	}
 
+	/**
+	 * Show a bead's lineage graph. Re-uses an open lineage view (re-centring it,
+	 * so Back returns to the previous bead); otherwise opens one in a split
+	 * beside the current tab.
+	 */
+	async openLineage(id: string): Promise<void> {
+		const { workspace } = this.app;
+		// setViewState (not view.focus) so a deferred, not-yet-loaded tab works
+		// too; the view's setState re-centres and records Back history.
+		const leaf =
+			workspace.getLeavesOfType(VIEW_TYPE_BEADS_LINEAGE)[0] ??
+			workspace.getLeaf("split", "vertical");
+		await leaf.setViewState({
+			type: VIEW_TYPE_BEADS_LINEAGE,
+			active: true,
+			state: { id },
+		});
+		await workspace.revealLeaf(leaf);
+	}
+
 	/** Open a blank editor tab to create a new bead (same surface as editing). */
 	async newBead(): Promise<void> {
 		const { workspace } = this.app;
@@ -202,16 +255,32 @@ export default class BeadsPlugin extends Plugin {
 	/** Re-read every open Beads pane and the counts (manual refresh, own writes). */
 	refreshViews(): void {
 		invalidateReadCache();
+		// Each pane re-reads its own counts.
 		for (const view of this.panes()) void view.refresh();
-		this.scheduleCounts(0);
+		if (this.countsTimer !== null) window.clearTimeout(this.countsTimer);
+		this.countsTimer = null;
+		if (!this.hasUnfilteredPane()) void this.loadCounts();
+	}
+
+	/** An unfiltered pane's ready count, so the status bar needs no `bd ready` of its own. */
+	setReadyCount(n: number): void {
+		if (n === this.readyCount && !this.countsError) return;
+		this.readyCount = n;
+		this.countsError = "";
+		this.renderStatusBar();
+	}
+
+	private hasUnfilteredPane(): boolean {
+		return this.panes().some((v) => v.isUnfiltered());
 	}
 
 	/** Journal records: patch what is on screen instead of re-listing. */
 	private onRecords(recs: JournalRecord[]): void {
+		// Each pane recounts its own tabs when a record can move them.
 		for (const view of this.panes()) view.applyRecords(recs);
 		let recount = false;
 		for (const r of recs) recount = affectsCounts(r, this.seen) || recount;
-		if (recount) this.scheduleCounts();
+		if (recount && !this.hasUnfilteredPane()) this.scheduleCounts();
 		const ids = new Set(recs.map((r) => r.issue_id));
 		for (const ed of this.editors()) ed.onExternalChange(ids);
 		this.scheduleEmbeds();
@@ -234,7 +303,7 @@ export default class BeadsPlugin extends Plugin {
 		this.renderStatusBar();
 	}
 
-	/** Coalesce count refreshes: one `bd status` per burst of changes. */
+	/** Coalesce status-bar count reads: one per burst of changes. */
 	scheduleCounts(delayMs = 300): void {
 		if (this.countsTimer !== null) window.clearTimeout(this.countsTimer);
 		this.countsTimer = window.setTimeout(() => {
@@ -250,23 +319,22 @@ export default class BeadsPlugin extends Plugin {
 		}
 		const opts = this.bdOptions();
 		if (!opts) {
-			this.counts = {};
+			this.readyCount = null;
 			this.countsError = "";
 			this.renderStatusBar();
 			return;
 		}
 		this.countsInFlight = true;
 		try {
-			this.counts = await bdStatusCounts(opts);
+			this.readyCount = await bdReadyCount(opts);
 			this.countsError = "";
 		} catch (e) {
-			this.counts = {};
+			this.readyCount = null;
 			this.countsError = (e as Error).message;
 		} finally {
 			this.countsInFlight = false;
 		}
 		this.renderStatusBar();
-		for (const view of this.panes()) view.onCounts();
 		if (this.countsAgain) {
 			this.countsAgain = false;
 			void this.loadCounts();
@@ -303,7 +371,7 @@ export default class BeadsPlugin extends Plugin {
 	private renderStatusBar(): void {
 		const el = this.statusBarEl;
 		if (!el) return;
-		const n = this.counts.ready_issues;
+		const n = this.readyCount;
 		el.setText(
 			this.countsError ? "● bd error" : typeof n === "number" ? `● ${n} ready` : "",
 		);
