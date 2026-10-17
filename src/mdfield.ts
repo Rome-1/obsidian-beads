@@ -1,5 +1,5 @@
-import { App, Component, Keymap, MarkdownRenderer, setIcon } from "obsidian";
-import { escapeAngleBrackets } from "./mdtext";
+import { App, Component, Keymap, setIcon } from "obsidian";
+import { renderUntrustedMarkdown } from "./untrusted";
 
 export interface MarkdownFieldOptions {
 	app: App;
@@ -30,8 +30,8 @@ export interface MarkdownFieldHandle {
  * edit the raw text, Escape or blur to go back to the preview. bd treats all of
  * these fields as markdown (`bd show` renders them with glamour).
  *
- * SECURITY: rendering goes through Obsidian's own `MarkdownRenderer` — the same
- * sanitized path as any note and as the comment thread — never raw innerHTML.
+ * SECURITY: bead text is untrusted, so it renders through
+ * `renderUntrustedMarkdown`, the same path as the comment thread.
  */
 export function renderMarkdownField(
 	parent: HTMLElement,
@@ -102,7 +102,7 @@ export function renderMarkdownField(
 			showEditor();
 		});
 		preview = opts.owner.addChild(new Component());
-		void MarkdownRenderer.render(opts.app, escapeAngleBrackets(value), md, "", preview);
+		void renderUntrustedMarkdown(opts.app, value, md, preview);
 	};
 
 	const showEditor = (focus = true): void => {
