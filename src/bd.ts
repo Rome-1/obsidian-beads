@@ -44,6 +44,8 @@ export interface BdOptions {
 	/** Working directory — the project root containing `.beads`. */
 	cwd: string;
 	timeoutMs?: number;
+	/** Cancels the call: it never starts if still queued, and is killed if running. */
+	signal?: AbortSignal;
 }
 
 // --- Global concurrency guard --------------------------------------------
@@ -76,6 +78,7 @@ function rawExec(args: string[], opts: BdOptions): Promise<BdResult> {
 				timeout: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
 				maxBuffer: MAX_BUFFER,
 				windowsHide: true,
+				signal: opts.signal,
 			},
 			(err, stdout, stderr) => {
 				if (err) {
@@ -100,6 +103,8 @@ function rawExec(args: string[], opts: BdOptions): Promise<BdResult> {
 async function run(args: string[], opts: BdOptions): Promise<BdResult> {
 	await acquire();
 	try {
+		// Cancelled while waiting for a slot: don't spawn it at all.
+		if (opts.signal?.aborted) throw new BdError(`bd ${args[0] ?? ""} cancelled`);
 		return await rawExec(args, opts);
 	} finally {
 		release();

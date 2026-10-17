@@ -2,7 +2,7 @@ import { ItemView, Keymap, ViewStateResult, WorkspaceLeaf, setIcon } from "obsid
 import { existsSync } from "fs";
 import { join } from "path";
 import type BeadsPlugin from "./main";
-import { VIEW_TYPE_BEADS_LINEAGE } from "./types";
+import { BeadIssue, VIEW_TYPE_BEADS_LINEAGE } from "./types";
 import { BdError, BdOptions, bdDepList, bdShow } from "./bd";
 import {
 	BLOCKING_TYPES,
@@ -47,6 +47,14 @@ export class BeadLineageView extends ItemView {
 	private opts: LineageOptions = { ...DEFAULT_LINEAGE_OPTIONS };
 	private expanded = new Set<string>();
 	private loadSeq = 0;
+	/** Cancels the walk in flight when a newer one starts. */
+	private walk: AbortController | null = null;
+	/**
+	 * `bd dep list` results for the current focus, by `<id>|<dir>`, so fold
+	 * expansions and depth changes don't refetch beads already walked.
+	 * Dropped on a new focus and on Refresh.
+	 */
+	private deps = new Map<string, BeadIssue[]>();
 
 	private backBtn: HTMLButtonElement | null = null;
 	private focusLabelEl: HTMLElement | null = null;
@@ -101,6 +109,7 @@ export class BeadLineageView extends ItemView {
 	}
 
 	onClose(): Promise<void> {
+		this.walk?.abort();
 		this.contentEl.empty();
 		return Promise.resolve();
 	}
@@ -111,6 +120,7 @@ export class BeadLineageView extends ItemView {
 		if (push && this.focusId) this.history.push(this.focusId);
 		this.focusId = id;
 		this.expanded.clear();
+		this.deps.clear();
 		this.updateHeader();
 		// Retitle the tab — only once the view is open (its header exists).
 		if (this.canvas) {
@@ -141,7 +151,10 @@ export class BeadLineageView extends ItemView {
 			this.userMoved = false;
 			this.fit();
 		});
-		this.iconButton(controls, "refresh-cw", "Refresh", () => void this.reload());
+		this.iconButton(controls, "refresh-cw", "Refresh", () => {
+			this.deps.clear();
+			void this.reload();
+		});
 		this.iconButton(controls, "file-text", "Open bead", () => {
 			if (this.focusId) void this.plugin.openBead(this.focusId);
 		});
@@ -219,12 +232,25 @@ export class BeadLineageView extends ItemView {
 	async reload(): Promise<void> {
 		const id = this.focusId;
 		if (!id || !this.canvas) return;
-		const bd = this.resolveOpts();
-		if (!bd) {
+		const base = this.resolveOpts();
+		if (!base) {
 			this.showMessage("Set a project root that contains a .beads/ database in Beads settings.");
 			return;
 		}
 		const seq = ++this.loadSeq;
+		// A superseded walk stops at once: its queued bd calls never start.
+		this.walk?.abort();
+		this.walk = new AbortController();
+		const bd: BdOptions = { ...base, signal: this.walk.signal };
+		const fetchDeps = async (bid: string, dir: "down" | "up"): Promise<BeadIssue[]> => {
+			const key = `${bid}|${dir}`;
+			const hit = this.deps.get(key);
+			if (hit) return hit;
+			const rows = await bdDepList(bd, bid, dir);
+			// Only a current walk fills the memo (Refresh may have cleared it since).
+			if (seq === this.loadSeq) this.deps.set(key, rows);
+			return rows;
+		};
 		this.statusEl?.setText("Loading lineage…");
 		try {
 			const issue = await bdShow(bd, id);
@@ -233,7 +259,7 @@ export class BeadLineageView extends ItemView {
 				this.showMessage(`No issue found for ${id}.`, true);
 				return;
 			}
-			const graph = await buildLineage(issue, (bid, dir) => bdDepList(bd, bid, dir), {
+			const graph = await buildLineage(issue, fetchDeps, {
 				...this.opts,
 				expanded: this.expanded,
 			});
