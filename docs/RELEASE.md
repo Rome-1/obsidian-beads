@@ -53,7 +53,7 @@ failing version is pulled from search within 24h. Download counts per version ar
 
 ---
 
-## Manifest compliance (verified for 0.0.9)
+## Manifest compliance (verified for 0.1.0)
 
 | Field | Value | Rule | OK |
 | --- | --- | --- | --- |
@@ -62,7 +62,7 @@ failing version is pulled from search within 24h. Download counts per version ar
 | `description` | *(one sentence)* | no "Obsidian"/"plugin", < 250 chars | ✅ |
 | `author` | `Rome Thorstenson` | present | ✅ |
 | `authorUrl` | `https://github.com/Rome-1` | profile URL (not the repo, not obsidian.md) | ✅ |
-| `version` | `0.0.9` | semver, no `v` prefix, matches release tag | ✅ |
+| `version` | `0.1.0` | semver, no `v` prefix, matches release tag | ✅ |
 | `minAppVersion` | `1.7.2` | valid, present in `versions.json` | ✅ |
 | `isDesktopOnly` | `true` | required (uses `child_process`) | ✅ |
 
