@@ -227,3 +227,14 @@ test("affectsCounts spots blocking and defer changes, and deletes", () => {
 	assert.equal(affectsCounts(rec({ issue_id: "bd-a1", issue: null }), seen), true);
 	assert.equal(seen.has("bd-a1"), false, "a deleted bead is forgotten");
 });
+
+test("affectsCounts under a filter: leaving it recounts, edits outside it don't", () => {
+	const seen = new Map<string, string>();
+	const f: PaneFilter = { ...EMPTY_FILTER, assignee: "alice" };
+	const inScope = (i: BeadIssue) => matchesFilter(i, f);
+	const a = (over: Partial<BeadIssue>) => rec({ issue_id: "bd-a1", issue: issue({ id: "bd-a1", ...over }) });
+	affectsCounts(a({ assignee: "alice" }), seen, inScope);
+	assert.equal(affectsCounts(a({ assignee: "bob" }), seen, inScope), true, "reassigned out of the filter");
+	assert.equal(affectsCounts(a({ assignee: "bob", status: "closed" }), seen, inScope), false);
+	assert.equal(affectsCounts(a({ assignee: "alice", status: "closed" }), seen, inScope), true);
+});

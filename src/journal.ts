@@ -121,17 +121,22 @@ export function applyRecord(
  * Whether a record can move the per-status counts. `seen` holds the last
  * count-relevant state per id and is updated here; a first sighting counts
  * as a change, so this errs toward re-counting.
+ *
+ * `inScope` is the pane's filter: a bead entering or leaving it (reassigned,
+ * relabelled, retyped) moves that pane's counts, and changes to a bead outside
+ * it move none.
  */
 export function affectsCounts(
 	rec: JournalRecord,
 	seen: Map<string, string>,
+	inScope: (issue: BeadIssue) => boolean = () => true,
 ): boolean {
 	if (!rec.issue) {
 		seen.delete(rec.issue_id);
 		return true;
 	}
 	const i = rec.issue;
-	const key = `${i.status}|${i.is_blocked === true}|${i.defer_until ?? ""}`;
+	const key = inScope(i) ? `${i.status}|${i.is_blocked === true}|${i.defer_until ?? ""}` : "out";
 	const prev = seen.get(rec.issue_id);
 	seen.set(rec.issue_id, key);
 	return prev !== key;

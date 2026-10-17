@@ -174,7 +174,7 @@ export class BeadsView extends ItemView {
 		let recount = false;
 		for (const rec of recs) {
 			for (const k of applyRecord(this.tabs, rec, inScope)) stale.add(k);
-			recount = affectsCounts(rec, this.seen) || recount;
+			recount = affectsCounts(rec, this.seen, inScope) || recount;
 		}
 		if (recount) this.scheduleCounts();
 		for (const k of stale) {
