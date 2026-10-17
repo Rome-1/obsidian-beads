@@ -43,9 +43,17 @@ a version that fails review is pulled from search within 24h.
 The dashboard reports any issues. Fix them in the repo, cut a **new release with
 an incremented version**, and the directory re-scans automatically.
 
+## 4. Maintaining the listing
+
+The plugin has been listed since July 2026 (0.0.6 passed automated review).
+There is nothing to resubmit: every GitHub release made as in step 1 is the update.
+After each release, check the dashboard for that version's review result, since a
+failing version is pulled from search within 24h. Download counts per version are in
+`community-plugin-stats.json` in `obsidianmd/obsidian-releases` (key `beads-pane`).
+
 ---
 
-## Manifest compliance (verified for 0.0.8)
+## Manifest compliance (verified for 0.0.9)
 
 | Field | Value | Rule | OK |
 | --- | --- | --- | --- |
@@ -54,7 +62,7 @@ an incremented version**, and the directory re-scans automatically.
 | `description` | *(one sentence)* | no "Obsidian"/"plugin", < 250 chars | ✅ |
 | `author` | `Rome Thorstenson` | present | ✅ |
 | `authorUrl` | `https://github.com/Rome-1` | profile URL (not the repo, not obsidian.md) | ✅ |
-| `version` | `0.0.8` | semver, no `v` prefix, matches release tag | ✅ |
+| `version` | `0.0.9` | semver, no `v` prefix, matches release tag | ✅ |
 | `minAppVersion` | `1.7.2` | valid, present in `versions.json` | ✅ |
 | `isDesktopOnly` | `true` | required (uses `child_process`) | ✅ |
 
