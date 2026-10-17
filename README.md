@@ -214,7 +214,10 @@ local reader, it is still in preview, and today it refuses the default embedded 
 npm install
 npm run dev     # esbuild watch → main.js
 npm run build   # typecheck + production bundle
+npm test        # unit tests, plus integration tests when bd is on PATH (or BD_BIN)
 ```
+
+`npm test` needs Node 22.6 or later, which runs the TypeScript tests directly.
 
 To test against a real vault, symlink or copy `main.js`, `manifest.json`, and
 `styles.css` into `<vault>/.obsidian/plugins/beads-pane/`.
