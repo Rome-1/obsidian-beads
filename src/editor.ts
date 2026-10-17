@@ -5,8 +5,6 @@ import {
 	ViewStateResult,
 	setIcon,
 } from "obsidian";
-import { existsSync } from "fs";
-import { join } from "path";
 import type BeadsPlugin from "./main";
 import {
 	BeadIssue,
@@ -42,6 +40,8 @@ interface EditorState {
 	id?: string;
 	/** Open a blank editor to create a new bead (no id yet). */
 	create?: boolean;
+	/** The project the bead lives in (absent in states saved before projects). */
+	project?: string;
 }
 
 /**
@@ -55,6 +55,8 @@ export class BeadEditorView extends ItemView {
 	private id: string | null = null;
 	private issue: BeadIssue | null = null;
 	private creating = false;
+	/** The project this tab was opened in; it stays there when the active one changes. */
+	private project: string | null = null;
 	private loadSeq = 0;
 
 	private model: EditModel = blankModel();
@@ -90,10 +92,13 @@ export class BeadEditorView extends ItemView {
 		return {
 			id: this.id ?? undefined,
 			create: this.creating && !this.id ? true : undefined,
+			project: this.project ?? undefined,
 		};
 	}
 
 	async setState(state: EditorState, result: ViewStateResult): Promise<void> {
+		if (state && typeof state.project === "string") this.project = state.project;
+		this.project ??= this.plugin.settings.activeProject;
 		if (state && typeof state.id === "string") this.id = state.id;
 		if (state && state.create) this.creating = true;
 		await super.setState(state, result);
@@ -122,10 +127,15 @@ export class BeadEditorView extends ItemView {
 	}
 
 	private resolveOpts(): BdOptions | null {
-		const s = this.plugin.settings;
-		if (!s.projectRoot) return null;
-		if (!existsSync(join(s.projectRoot, ".beads"))) return null;
-		return { bdPath: s.bdPath, cwd: s.projectRoot };
+		return this.project === null ? null : this.plugin.bdOptions(this.project);
+	}
+
+	/** The project was renamed in settings. */
+	renameProject(from: string, to: string): void {
+		if (this.project === from) {
+			this.project = to;
+			this.app.workspace.requestSaveLayout();
+		}
 	}
 
 	private message(text: string, isError = false): void {
@@ -145,7 +155,8 @@ export class BeadEditorView extends ItemView {
 	 * edits, say so instead of discarding them.
 	 */
 	onExternalChange(ids: Set<string> | null): void {
-		if (!this.id || !this.issue) return;
+		// Live records describe the active project only.
+		if (!this.id || !this.issue || this.project !== this.plugin.settings.activeProject) return;
 		if (ids && !ids.has(this.id)) return;
 		if (this.isDirty()) {
 			this.contentEl.querySelector(".beads-editor-stale")?.remove();
@@ -181,7 +192,9 @@ export class BeadEditorView extends ItemView {
 		const opts = this.resolveOpts();
 		if (!opts) {
 			this.message(
-				"Set a project root that contains a .beads/ database in Beads settings.",
+				this.project !== null && !this.plugin.project(this.project)
+					? `There is no project named "${this.project}" in Beads settings.`
+					: "Set a project path that contains a .beads/ database in Beads settings.",
 			);
 			return;
 		}
@@ -255,7 +268,7 @@ export class BeadEditorView extends ItemView {
 			});
 			setIcon(lineage, "git-fork");
 			lineage.onclick = () => {
-				if (issue) void this.plugin.openLineage(issue.id);
+				if (issue) void this.plugin.openLineage(issue.id, this.project ?? undefined);
 			};
 			this.revertBtn = actions.createEl("button", { text: "Revert" });
 			this.saveBtn = actions.createEl("button", { cls: "mod-cta", text: "Save" });
@@ -474,7 +487,7 @@ export class BeadEditorView extends ItemView {
 	private async save(): Promise<void> {
 		const opts = this.resolveOpts();
 		if (!opts) {
-			new Notice("Beads: no project root set.");
+			new Notice("Beads: this bead's project has no usable path.");
 			return;
 		}
 		if (this.creating && !this.issue) {
@@ -597,7 +610,7 @@ export class BeadEditorView extends ItemView {
 			renderPriorityDot(item, d.priority ?? 2);
 			item.createSpan({ cls: "beads-dep-id", text: d.id });
 			item.createSpan({ cls: "beads-dep-title", text: d.title });
-			item.onclick = () => void this.plugin.openBead(d.id);
+			item.onclick = () => void this.plugin.openBead(d.id, this.project ?? undefined);
 		}
 	}
 

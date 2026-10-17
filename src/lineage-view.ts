@@ -1,6 +1,4 @@
 import { ItemView, Keymap, ViewStateResult, WorkspaceLeaf, setIcon } from "obsidian";
-import { existsSync } from "fs";
-import { join } from "path";
 import type BeadsPlugin from "./main";
 import { BeadIssue, VIEW_TYPE_BEADS_LINEAGE } from "./types";
 import { BdError, BdOptions, bdDepList, bdShow } from "./bd";
@@ -26,6 +24,8 @@ const MAX_ZOOM_W = 40_000; // largest viewBox width (max zoom-out)
 
 interface LineageState {
 	id?: string;
+	/** The project the bead lives in (absent in states saved before projects). */
+	project?: string;
 }
 
 let markerSeq = 0;
@@ -43,6 +43,8 @@ let markerSeq = 0;
  */
 export class BeadLineageView extends ItemView {
 	private focusId: string | null = null;
+	/** The project the graph walks; it stays there when the active one changes. */
+	private project: string | null = null;
 	private history: string[] = [];
 	private opts: LineageOptions = { ...DEFAULT_LINEAGE_OPTIONS };
 	private expanded = new Set<string>();
@@ -87,13 +89,31 @@ export class BeadLineageView extends ItemView {
 	}
 
 	getState(): Record<string, unknown> {
-		return { id: this.focusId ?? undefined };
+		return { id: this.focusId ?? undefined, project: this.project ?? undefined };
 	}
 
 	async setState(state: LineageState, result: ViewStateResult): Promise<void> {
 		await super.setState(state, result);
+		const project =
+			state && typeof state.project === "string"
+				? state.project
+				: (this.project ?? this.plugin.settings.activeProject);
+		if (project !== this.project) {
+			// Back can't step into another project's beads.
+			this.project = project;
+			this.history = [];
+			this.focusId = null;
+		}
 		if (state && typeof state.id === "string" && state.id !== this.focusId) {
 			this.focus(state.id, true);
+		}
+	}
+
+	/** The project was renamed in settings. */
+	renameProject(from: string, to: string): void {
+		if (this.project === from) {
+			this.project = to;
+			this.app.workspace.requestSaveLayout();
 		}
 	}
 
@@ -156,7 +176,7 @@ export class BeadLineageView extends ItemView {
 			void this.reload();
 		});
 		this.iconButton(controls, "file-text", "Open bead", () => {
-			if (this.focusId) void this.plugin.openBead(this.focusId);
+			if (this.focusId) void this.plugin.openBead(this.focusId, this.project ?? undefined);
 		});
 
 		this.statusEl = root.createDiv({ cls: "beads-ln-status" });
@@ -223,10 +243,7 @@ export class BeadLineageView extends ItemView {
 	// --- load ------------------------------------------------------------
 
 	private resolveOpts(): BdOptions | null {
-		const s = this.plugin.settings;
-		if (!s.projectRoot) return null;
-		if (!existsSync(join(s.projectRoot, ".beads"))) return null;
-		return { bdPath: s.bdPath, cwd: s.projectRoot };
+		return this.project === null ? null : this.plugin.bdOptions(this.project);
 	}
 
 	async reload(): Promise<void> {
@@ -234,7 +251,11 @@ export class BeadLineageView extends ItemView {
 		if (!id || !this.canvas) return;
 		const base = this.resolveOpts();
 		if (!base) {
-			this.showMessage("Set a project root that contains a .beads/ database in Beads settings.");
+			this.showMessage(
+				this.project !== null && !this.plugin.project(this.project)
+					? `There is no project named "${this.project}" in Beads settings.`
+					: "Set a project path that contains a .beads/ database in Beads settings.",
+			);
 			return;
 		}
 		const seq = ++this.loadSeq;
@@ -449,7 +470,9 @@ export class BeadLineageView extends ItemView {
 			const node = target.closest("[data-bead]");
 			const id = node?.getAttribute("data-bead");
 			if (!id) return;
-			if (id === this.focusId || Keymap.isModEvent(e)) void this.plugin.openBead(id);
+			if (id === this.focusId || Keymap.isModEvent(e)) {
+				void this.plugin.openBead(id, this.project ?? undefined);
+			}
 			else this.focus(id, true);
 		});
 	}

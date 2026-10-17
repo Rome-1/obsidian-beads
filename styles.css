@@ -822,3 +822,20 @@ select.beads-prop-input {
 .beads-statusbar.is-error {
 	color: var(--text-error);
 }
+
+/* Project switcher in the pane header (two or more projects). */
+.beads-project-select {
+	max-width: 12em;
+	height: auto;
+	padding-top: 0;
+	padding-bottom: 0;
+	font-size: var(--font-ui-smaller);
+}
+.beads-suggest-path {
+	display: block;
+	color: var(--text-muted);
+}
+.beads-settings-error {
+	color: var(--text-error);
+	font-size: var(--font-ui-small);
+}
