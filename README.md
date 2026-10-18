@@ -1,9 +1,9 @@
 # Beads for Obsidian
 
-A tiny, **desktop-only** Obsidian plugin that renders a **live, clickable pane** for the
+A **desktop-only** Obsidian plugin that renders a **live, clickable pane** for the
 [Beads (`bd`)](https://github.com/gastownhall/beads) issue tracker — and does *real*
-integration: click any issue to **edit it in a tab**, as YAML frontmatter + a markdown
-body, and save straight back to `bd`.
+integration: click any issue to **edit it in a tab**, with typed properties and
+markdown text fields, and save straight back to `bd`.
 
 No Obsidian + Beads plugin existed before this one — it fills a genuine gap for anyone
 who tracks work in `bd` and lives in Obsidian.
