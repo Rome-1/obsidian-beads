@@ -49,6 +49,10 @@ an incremented version**, and the directory re-scans automatically.
 
 ## 4. Maintaining the listing
 
+`npm run lint` reproduces the review's source-code checks: the project has no
+@types/node (the review type-checks without it), and `src/node.d.ts` declares the
+few Node APIs the plugin uses. CI runs it on every pull request.
+
 The plugin has been listed since July 2026 (0.0.6 passed automated review).
 There is nothing to resubmit: every GitHub release made as in step 1 is the update.
 After each release, check the dashboard for that version's review result, since a

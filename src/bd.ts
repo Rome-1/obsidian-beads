@@ -86,7 +86,7 @@ function rawExec(args: string[], opts: BdOptions): Promise<BdResult> {
 			(err, stdout, stderr) => {
 				if (err) {
 					const msg =
-						(err as NodeJS.ErrnoException).code === "ENOENT"
+						err.code === "ENOENT"
 							? `bd binary not found at "${opts.bdPath}". Set the path in Beads settings.`
 							: `bd ${args[0] ?? ""} failed: ${err.message}`;
 					// Keep stdout on the cause: some failures (journal
