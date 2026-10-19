@@ -1,5 +1,7 @@
 # Beads for Obsidian — v1 Vision
 
+> **Historical.** Written before 0.1 for the first release; the plugin has since grown live updates, filters, a lineage graph and multiple projects. The README describes what ships today.
+
 *The dream is a second brain that knows what you owe it. The shipping product is a
 pane, a checkbox, one text field, and a code block. This doc is the argument that
 those four things ARE the dream.*

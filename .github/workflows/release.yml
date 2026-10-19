@@ -1,0 +1,55 @@
+# Builds a release from the tagged source and attests main.js and styles.css,
+# so anyone can verify the assets came from this repository:
+#   gh attestation verify main.js --repo Rome-1/obsidian-beads
+# Push an annotated tag equal to manifest.json's version (no "v" prefix) to run
+# it; the tag message becomes the release notes.
+name: Release
+
+on:
+  push:
+    tags: ["[0-9]+.[0-9]+.[0-9]+"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # The checkout fetches the tagged commit, not the annotated tag object
+      # that carries the notes.
+      - run: git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Tag must match manifest.json
+        run: test "$(node -p 'require("./manifest.json").version')" = "$GITHUB_REF_NAME"
+
+      - run: npm run build
+
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            main.js
+            styles.css
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" main.js manifest.json styles.css
+          --title "$GITHUB_REF_NAME" --notes-from-tag

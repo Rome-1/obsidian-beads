@@ -13,18 +13,22 @@ The release tag **must exactly match** `manifest.json`'s `version` — **no `v`
 prefix**. Prerequisites (all present): public repo, `README.md`, `LICENSE`,
 `manifest.json`, and a clean `npm run build`.
 
+Releases are built by `.github/workflows/release.yml`, not by hand, so each one
+carries a provenance attestation for `main.js` and `styles.css` (Obsidian's review
+recommends this):
+
 ```bash
-npm run build          # produces a fresh production main.js
-gh release create 0.0.5 main.js manifest.json styles.css \
-  --title "0.0.5" --notes "…"
+npm version 0.1.1 --no-git-tag-version   # bumps package.json, manifest.json, versions.json
+git commit -am "chore: release 0.1.1" && git push
+git tag -a 0.1.1 -m "Release notes in markdown…"   # the tag message becomes the notes
+git push origin 0.1.1
 ```
 
-Attach `main.js`, `manifest.json`, and `styles.css` as **individual** binary
+The workflow checks the tag against `manifest.json`, builds, attests, and creates
+the release with `main.js`, `manifest.json`, and `styles.css` as **individual**
 assets (not zipped, not in a subfolder). `versions.json` maps each released
-version → its `minAppVersion`.
-
-> Bumping later: edit the version in `manifest.json` + `package.json`, add the
-> mapping to `versions.json`, commit, then `gh release create <version> …`.
+version → its `minAppVersion`. Check a release with
+`gh attestation verify main.js --repo Rome-1/obsidian-beads`.
 
 ## 2. Submit via the developer dashboard *(Rome — needs an Obsidian account)*
 
