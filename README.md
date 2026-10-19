@@ -66,7 +66,7 @@ who tracks work in `bd` and lives in Obsidian.
 
 ## Installation
 
-### Community plugins (once accepted)
+### Community plugins
 
 Settings → Community plugins → Browse → search **"Beads"** → Install → Enable.
 
@@ -218,14 +218,23 @@ local reader, it is still in preview, and today it refuses the default embedded 
 - Commands are invoked with `execFile` (or `spawn`, for the one long-lived
   `bd events tail`) and an **argument array** — never a shell string — so issue IDs and
   other values can't inject shell metacharacters.
-- Issue titles and descriptions render as plain text (never HTML) in the pane, so a bead
-  authored elsewhere and synced in can't inject markup. Comment threads in the editor
-  render through Obsidian's own `MarkdownRenderer` — the same sanitized path as any note.
-  Data-controlled values are also passed after a `--` sentinel (or as `--flag=value`) so
-  they can't be reparsed as `bd` flags.
+- Bead text is treated as untrusted, since it can come from anyone who writes to the
+  workspace, including by sync. Titles render as plain text. Descriptions, other text
+  fields and comments render as markdown with every `<` escaped (so no raw HTML), code-block
+  language tags dropped (so no other plugin's code block, such as `dataviewjs`, runs), and
+  links other than http(s) and mailto reduced to text. Markdown images still load, as in
+  any note. Data-controlled values are also passed after a `--` sentinel (or as
+  `--flag=value`) so they can't be reparsed as `bd` flags.
 - The plugin runs `bd` against whatever `.beads/` your projects point at (including
   an auto-detected vault-local one). It never executes anything *from* the dataset — but
   that means you trust `bd`'s own parsing of that database, as with any `bd` invocation.
+- What Obsidian's plugin review flags, and why: **process execution** (`child_process`)
+  is how the plugin talks to `bd`; **filesystem access** (`fs`) checks that a project
+  folder has a `.beads/` and watches it for changes; **clipboard** is write-only, for the
+  editor's copy-ID button. The plugin makes no network requests.
+- Releases are built by GitHub Actions from the tagged source, with a provenance
+  attestation for `main.js` and `styles.css`. To check a download:
+  `gh attestation verify main.js --repo Rome-1/obsidian-beads`.
 
 ## Development
 

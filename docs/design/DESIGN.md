@@ -1,5 +1,7 @@
 # Beads for Obsidian — Design
 
+> **Historical.** Written before 0.1 for the first release; the plugin has since grown live updates, filters, a lineage graph and multiple projects. The README describes what ships today.
+
 *The dream is a second brain that knows what you owe it. The honest first
 submission is one pane that answers one question. This doc draws a hard line
 between them: everything in **v1** ships now; everything in **the roadmap** is

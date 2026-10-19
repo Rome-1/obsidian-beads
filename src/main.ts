@@ -434,7 +434,14 @@ export default class BeadsPlugin extends Plugin {
 		const el = this.statusBarEl;
 		if (!el) return;
 		const n = this.readyCount;
-		const text = this.countsError ? "● bd error" : typeof n === "number" ? `● ${n} ready` : "";
+		// "…" while a project's first count is in flight (e.g. just after a switch).
+		const text = this.countsError
+			? "● bd error"
+			: typeof n === "number"
+				? `● ${n} ready`
+				: this.bdOptions()
+					? "● …"
+					: "";
 		// Name the project only when there is more than one to tell apart.
 		const name = this.settings.projects.length > 1 ? this.settings.activeProject : "";
 		el.setText(text && name ? `${name.length > 16 ? `${name.slice(0, 15)}…` : name} ${text}` : text);

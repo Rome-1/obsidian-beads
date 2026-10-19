@@ -1,5 +1,7 @@
 # Design materials — raw surface & constraints (facts, no opinions)
 
+> **Historical.** Written before 0.1 for the first release; the plugin has since grown live updates, filters, a lineage graph and multiple projects. The README describes what ships today.
+
 Grounding for the feature-design pass. This is *what exists*, not *what we should build*.
 
 ## Current plugin (shipped MVP, v0.0.1)
