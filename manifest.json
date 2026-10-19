@@ -1,7 +1,7 @@
 {
 	"id": "beads-pane",
 	"name": "Beads",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"minAppVersion": "1.7.2",
 	"description": "A live pane and editor for the Beads (bd) issue tracker — see what's ready, edit issues inline, and embed live queries in your notes. Desktop only.",
 	"author": "Rome Thorstenson",
