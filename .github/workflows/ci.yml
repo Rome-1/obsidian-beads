@@ -1,0 +1,34 @@
+# Lint, build and unit tests for pull requests and main. The lint runs without
+# @types/node (see src/node.d.ts), the same conditions as Obsidian's plugin
+# review, so a PR that would draw review warnings fails here first. The bd
+# integration tests skip themselves: no bd binary on the runner.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint -- --max-warnings=0
+      - run: npm run build
+      - run: npm test
